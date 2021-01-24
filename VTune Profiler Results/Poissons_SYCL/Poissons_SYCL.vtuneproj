@@ -1,0 +1,330 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<root>
+ <rdmgr>
+  <timestamp type="u64_t">1611504446</timestamp>
+  <hostname>LAPTOP-HO2JL64P</hostname>
+  <os>windows</os>
+  <product>Intel® oneAPI VTune™ Profiler 2021.1.1 Gold</product>
+  <buildNumber type="s32_t">613804</buildNumber>
+  <logicalCPUCount type="s32_t">8</logicalCPUCount>
+  <physicalCoreCount type="s32_t">4</physicalCoreCount>
+  <processorPackageCount type="s32_t">1</processorPackageCount>
+  <CPUFrequency type="s64_t">1000000000</CPUFrequency>
+  <CPUFamily type="s32_t">6</CPUFamily>
+  <CPUModel type="s32_t">126</CPUModel>
+  <CPUStepping type="s32_t">5</CPUStepping>
+  <CPUBrandName>Intel(R) Core(TM) i5-1035G1 CPU @ 1.00GHz</CPUBrandName>
+  <isa>avx512</isa>
+ </rdmgr>
+ <vs_search_dirs>
+  <searchDirs>
+   <searchCategory>
+    <category type="u8_t">1</category>
+    <searchDirectory>
+     <name>C:\Program Files (x86)\Intel\oneAPI\compiler\2021.1.1\windows\..\..\..\tbb\latest\redist\intel64\vc_mt</name>
+     <recursive type="bool">false</recursive>
+     <priority type="bool">false</priority>
+    </searchDirectory>
+    <searchDirectory>
+     <name>C:\Program Files (x86)\Intel\oneAPI\compiler\2021.1.1\windows\lib\oclfpga\bin</name>
+     <recursive type="bool">false</recursive>
+     <priority type="bool">false</priority>
+    </searchDirectory>
+    <searchDirectory>
+     <name>C:\Program Files (x86)\Intel\oneAPI\compiler\2021.1.1\windows\lib\oclfpga\windows64\bin</name>
+     <recursive type="bool">false</recursive>
+     <priority type="bool">false</priority>
+    </searchDirectory>
+    <searchDirectory>
+     <name>C:\Program Files (x86)\Intel\oneAPI\compiler\2021.1.1\windows\lib\oclfpga\host\windows64\bin</name>
+     <recursive type="bool">false</recursive>
+     <priority type="bool">false</priority>
+    </searchDirectory>
+    <searchDirectory>
+     <name>C:\Program Files (x86)\Intel\oneAPI\compiler\2021.1.1\windows\bin</name>
+     <recursive type="bool">false</recursive>
+     <priority type="bool">false</priority>
+    </searchDirectory>
+    <searchDirectory>
+     <name>C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\VC\Tools\MSVC\14.28.29333\bin\HostX64\x64</name>
+     <recursive type="bool">false</recursive>
+     <priority type="bool">false</priority>
+    </searchDirectory>
+    <searchDirectory>
+     <name>C:\Program Files (x86)\Windows Kits\10\bin\10.0.18362.0\x64</name>
+     <recursive type="bool">false</recursive>
+     <priority type="bool">false</priority>
+    </searchDirectory>
+    <searchDirectory>
+     <name>C:\Program Files (x86)\Windows Kits\10\bin\10.0.18362.0\x86</name>
+     <recursive type="bool">false</recursive>
+     <priority type="bool">false</priority>
+    </searchDirectory>
+    <searchDirectory>
+     <name>C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\Common7\tools</name>
+     <recursive type="bool">false</recursive>
+     <priority type="bool">false</priority>
+    </searchDirectory>
+    <searchDirectory>
+     <name>C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\Common7\ide</name>
+     <recursive type="bool">false</recursive>
+     <priority type="bool">false</priority>
+    </searchDirectory>
+    <searchDirectory>
+     <name>C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\MSBuild\Current\Bin</name>
+     <recursive type="bool">false</recursive>
+     <priority type="bool">false</priority>
+    </searchDirectory>
+    <searchDirectory>
+     <name>C:\WINDOWS\Microsoft.NET\Framework64\v4.0.30319\</name>
+     <recursive type="bool">false</recursive>
+     <priority type="bool">false</priority>
+    </searchDirectory>
+    <searchDirectory>
+     <name>C:\WINDOWS\Microsoft.NET\Framework\v4.0.30319\</name>
+     <recursive type="bool">false</recursive>
+     <priority type="bool">false</priority>
+    </searchDirectory>
+    <searchDirectory>
+     <name>C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v10.2\bin</name>
+     <recursive type="bool">false</recursive>
+     <priority type="bool">false</priority>
+    </searchDirectory>
+    <searchDirectory>
+     <name>C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v10.2\libnvvp</name>
+     <recursive type="bool">false</recursive>
+     <priority type="bool">false</priority>
+    </searchDirectory>
+    <searchDirectory>
+     <name>C:\Program Files (x86)\IntelSWTools\system_studio_2020\OpenCL\sdk\bin\x64</name>
+     <recursive type="bool">false</recursive>
+     <priority type="bool">false</priority>
+    </searchDirectory>
+    <searchDirectory>
+     <name>C:\Program Files (x86)\IntelSWTools\system_studio_2020\OpenCL\sdk\bin\x86</name>
+     <recursive type="bool">false</recursive>
+     <priority type="bool">false</priority>
+    </searchDirectory>
+    <searchDirectory>
+     <name>C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v10.1\bin</name>
+     <recursive type="bool">false</recursive>
+     <priority type="bool">false</priority>
+    </searchDirectory>
+    <searchDirectory>
+     <name>C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v10.1\libnvvp</name>
+     <recursive type="bool">false</recursive>
+     <priority type="bool">false</priority>
+    </searchDirectory>
+    <searchDirectory>
+     <name>C:\Windows\system32</name>
+     <recursive type="bool">false</recursive>
+     <priority type="bool">false</priority>
+    </searchDirectory>
+    <searchDirectory>
+     <name>C:\Windows</name>
+     <recursive type="bool">false</recursive>
+     <priority type="bool">false</priority>
+    </searchDirectory>
+    <searchDirectory>
+     <name>C:\Windows\System32\Wbem</name>
+     <recursive type="bool">false</recursive>
+     <priority type="bool">false</priority>
+    </searchDirectory>
+    <searchDirectory>
+     <name>C:\Windows\System32\WindowsPowerShell\v1.0\</name>
+     <recursive type="bool">false</recursive>
+     <priority type="bool">false</priority>
+    </searchDirectory>
+    <searchDirectory>
+     <name>C:\Program Files (x86)\NVIDIA Corporation\PhysX\Common</name>
+     <recursive type="bool">false</recursive>
+     <priority type="bool">false</priority>
+    </searchDirectory>
+    <searchDirectory>
+     <name>C:\Program Files\NVIDIA Corporation\NVIDIA NvDLISR</name>
+     <recursive type="bool">false</recursive>
+     <priority type="bool">false</priority>
+    </searchDirectory>
+    <searchDirectory>
+     <name>C:\Program Files\NVIDIA Corporation\Nsight Compute 2019.1\</name>
+     <recursive type="bool">false</recursive>
+     <priority type="bool">false</priority>
+    </searchDirectory>
+    <searchDirectory>
+     <name>C:\Program Files\PuTTY\</name>
+     <recursive type="bool">false</recursive>
+     <priority type="bool">false</priority>
+    </searchDirectory>
+    <searchDirectory>
+     <name>C:\Program Files\Docker\Docker\resources\bin</name>
+     <recursive type="bool">false</recursive>
+     <priority type="bool">false</priority>
+    </searchDirectory>
+    <searchDirectory>
+     <name>C:\ProgramData\DockerDesktop\version-bin</name>
+     <recursive type="bool">false</recursive>
+     <priority type="bool">false</priority>
+    </searchDirectory>
+    <searchDirectory>
+     <name>C:\Program Files\nodejs\</name>
+     <recursive type="bool">false</recursive>
+     <priority type="bool">false</priority>
+    </searchDirectory>
+    <searchDirectory>
+     <name>C:\Program Files\MATLAB\R2020b\bin</name>
+     <recursive type="bool">false</recursive>
+     <priority type="bool">false</priority>
+    </searchDirectory>
+    <searchDirectory>
+     <name>C:\Program Files\Git\cmd</name>
+     <recursive type="bool">false</recursive>
+     <priority type="bool">false</priority>
+    </searchDirectory>
+    <searchDirectory>
+     <name>C:\Users\nikhi\AppData\Local\Programs\Python\Python37\Scripts\</name>
+     <recursive type="bool">false</recursive>
+     <priority type="bool">false</priority>
+    </searchDirectory>
+    <searchDirectory>
+     <name>C:\Users\nikhi\AppData\Local\Programs\Python\Python37\</name>
+     <recursive type="bool">false</recursive>
+     <priority type="bool">false</priority>
+    </searchDirectory>
+    <searchDirectory>
+     <name>C:\Users\nikhi\AppData\Local\Microsoft\WindowsApps</name>
+     <recursive type="bool">false</recursive>
+     <priority type="bool">false</priority>
+    </searchDirectory>
+    <searchDirectory>
+     <name>C:\Users\nikhi\AppData\Local\Programs\Microsoft VS Code\bin</name>
+     <recursive type="bool">false</recursive>
+     <priority type="bool">false</priority>
+    </searchDirectory>
+    <searchDirectory>
+     <name>C:\Users\nikhi\AppData\Roaming\npm</name>
+     <recursive type="bool">false</recursive>
+     <priority type="bool">false</priority>
+    </searchDirectory>
+    <searchDirectory>
+     <name>C:\Program Files\mingw-w64\x86_64-8.1.0-posix-seh-rt_v6-rev0\mingw64\bin</name>
+     <recursive type="bool">false</recursive>
+     <priority type="bool">false</priority>
+    </searchDirectory>
+    <searchDirectory>
+     <name>C:\Program Files (x86)\CMake\bin</name>
+     <recursive type="bool">false</recursive>
+     <priority type="bool">false</priority>
+    </searchDirectory>
+    <searchDirectory>
+     <name>C:\Users\nikhi\source\repos\Poissons_SYCL</name>
+     <recursive type="bool">false</recursive>
+     <priority type="bool">false</priority>
+    </searchDirectory>
+   </searchCategory>
+   <searchCategory>
+    <category type="u8_t">2</category>
+    <searchDirectory>
+     <name>C:\Users\nikhi\source\repos\Poissons_SYCL</name>
+     <recursive type="bool">true</recursive>
+     <priority type="bool">false</priority>
+    </searchDirectory>
+   </searchCategory>
+   <searchCategory>
+    <category type="u8_t">3</category>
+    <searchDirectory>
+     <name>C:\Users\nikhi\source\repos\Poissons_SYCL</name>
+     <recursive type="bool">true</recursive>
+     <priority type="bool">false</priority>
+    </searchDirectory>
+    <searchDirectory>
+     <name>C:\Program Files (x86)\Intel\oneAPI\mkl\2021.1.1\include</name>
+     <recursive type="bool">false</recursive>
+     <priority type="bool">false</priority>
+    </searchDirectory>
+    <searchDirectory>
+     <name>C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\VC\Tools\MSVC\14.28.29333\crt\src</name>
+     <recursive type="bool">false</recursive>
+     <priority type="bool">false</priority>
+    </searchDirectory>
+    <searchDirectory>
+     <name>C:\Program Files (x86)\Windows Kits\10\Source\10.0.18362.0\ucrt</name>
+     <recursive type="bool">false</recursive>
+     <priority type="bool">false</priority>
+    </searchDirectory>
+    <searchDirectory>
+     <name>C:\Program Files (x86)\Intel\oneAPI\tbb\2021.1.1\include</name>
+     <recursive type="bool">false</recursive>
+     <priority type="bool">false</priority>
+    </searchDirectory>
+    <searchDirectory>
+     <name>C:\Program Files (x86)\Intel\oneAPI\mkl\2021.1.1\include\fftw</name>
+     <recursive type="bool">false</recursive>
+     <priority type="bool">false</priority>
+    </searchDirectory>
+    <searchDirectory>
+     <name>C:\Program Files (x86)\Intel\oneAPI\mkl\2021.1.1\include\intel64</name>
+     <recursive type="bool">false</recursive>
+     <priority type="bool">false</priority>
+    </searchDirectory>
+    <searchDirectory>
+     <name>C:\Program Files (x86)\Intel\oneAPI\compiler\2021.1.1\windows\..\windows\include</name>
+     <recursive type="bool">false</recursive>
+     <priority type="bool">false</priority>
+    </searchDirectory>
+    <searchDirectory>
+     <name>C:\Program Files (x86)\Intel\oneAPI\compiler\2021.1.1\windows\include\sycl</name>
+     <recursive type="bool">false</recursive>
+     <priority type="bool">false</priority>
+    </searchDirectory>
+    <searchDirectory>
+     <name>C:\Program Files (x86)\Intel\oneAPI\compiler\2021.1.1\windows\compiler\include</name>
+     <recursive type="bool">false</recursive>
+     <priority type="bool">false</priority>
+    </searchDirectory>
+    <searchDirectory>
+     <name>C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\VC\Tools\MSVC\14.28.29333\include</name>
+     <recursive type="bool">false</recursive>
+     <priority type="bool">false</priority>
+    </searchDirectory>
+    <searchDirectory>
+     <name>C:\Program Files (x86)\Microsoft Visual Studio\2019\Community\VC\Auxiliary\VS\include</name>
+     <recursive type="bool">false</recursive>
+     <priority type="bool">false</priority>
+    </searchDirectory>
+    <searchDirectory>
+     <name>C:\Program Files (x86)\Windows Kits\10\Include\10.0.18362.0\ucrt</name>
+     <recursive type="bool">false</recursive>
+     <priority type="bool">false</priority>
+    </searchDirectory>
+    <searchDirectory>
+     <name>C:\Program Files (x86)\Windows Kits\10\Include\10.0.18362.0\um</name>
+     <recursive type="bool">false</recursive>
+     <priority type="bool">false</priority>
+    </searchDirectory>
+    <searchDirectory>
+     <name>C:\Program Files (x86)\Windows Kits\10\Include\10.0.18362.0\shared</name>
+     <recursive type="bool">false</recursive>
+     <priority type="bool">false</priority>
+    </searchDirectory>
+    <searchDirectory>
+     <name>C:\Program Files (x86)\Windows Kits\10\Include\10.0.18362.0\winrt</name>
+     <recursive type="bool">false</recursive>
+     <priority type="bool">false</priority>
+    </searchDirectory>
+    <searchDirectory>
+     <name>C:\Program Files (x86)\Windows Kits\10\Include\10.0.18362.0\cppwinrt</name>
+     <recursive type="bool">false</recursive>
+     <priority type="bool">false</priority>
+    </searchDirectory>
+    <searchDirectory>
+     <name>C:\Program Files (x86)\Intel\oneAPI\compiler\2021.1.1\windows\lib\clang\12.0.0\include</name>
+     <recursive type="bool">false</recursive>
+     <priority type="bool">false</priority>
+    </searchDirectory>
+   </searchCategory>
+   <searchCategory>
+    <category type="u8_t">4</category>
+   </searchCategory>
+  </searchDirs>
+ </vs_search_dirs>
+</root>
