@@ -134,14 +134,8 @@ std::vector<float> triangle_element_stiffness_matrix(float &x1, float  &x2, floa
 
 std::vector <float> force_function_element(float &x1, float  &x2, float  &x3, float  &y1, float  &y2, float  &y3) {
 	float aplha_1 = x2 * y3 - x3 * y2;
-	//float beta_1 = y2 - y3;
-	//float gamma_1 = -1 * (x2 - x3);
 	float aplha_2 = x3 * y1 - x1 * y3;
-	//float beta_2 = y3 - y1;
-	//float gamma_2 = -1 * (x3 - x1);
 	float aplha_3 = x1 * y2 - x2 * y1;
-	//float beta_3 = y1 - y2;
-	//float gamma_3 = -1 * (x1 - x2);
 	float Ae = (aplha_1 + aplha_2 + aplha_3) / 2.0;    // Calculating the area of the triangular element
 
 	std::vector<float> f_element(3,0);
@@ -392,6 +386,82 @@ std::vector<float> Interpolation2D(std::vector <float>& vec_2h) {
 	return vec_h;
 }
 
+std::vector<float> Interpolation2D_parallel(std::vector <float>& vec_2h) {
+	queue q;
+	int vec_2h_dim = int(std::sqrt(vec_2h.size()));
+	int vec_h_dim = 2 * vec_2h_dim + 1;
+	std::vector<float> vec_h(vec_h_dim * vec_h_dim, 0);
+	vec_h[0] = 0.25 * vec_2h[0];
+	vec_h[vec_h_dim * vec_h_dim - 1] = 0.25 * vec_2h[vec_2h_dim * vec_2h_dim - 1];
+	vec_h[vec_h_dim - 1] = 0.25 * vec_2h[vec_2h_dim - 1];
+	vec_h[vec_h_dim * (vec_h_dim - 1)] = 0.25 * vec_2h[vec_2h_dim * (vec_2h_dim - 1)];
+	{
+		buffer <float, 2> vec_2h_buf(vec_2h.data(), range<2>{vec_2h_dim, vec_2h_dim});
+		buffer <float, 2> vec_h_buf(vec_h.data(), range<2>{vec_h_dim, vec_h_dim });
+		q.submit([&](handler& h) {
+			accessor vec_h_acc{ vec_h_buf, h };
+			accessor vec_2h_acc{ vec_2h_buf , h };
+
+			//Domain has been divided such that the number of elements in each dimension is a power of 2. Hence the number of nodes in each dim is odd.
+
+			int num_even_per_dim = (vec_h_dim - 1) / 2;
+			int num_odd_per_dim = num_even_per_dim - 1;
+
+			//parallel loop for processing only the even numbered boundary nodes (index = node_number -1) of the structured domain
+
+			h.parallel_for(range<1>{num_even_per_dim}, [=](id<1>idx) {
+				int j_h = idx[0] * 2 + 2;
+				//int j_2h = int(j_h / 2);
+				vec_h_acc[0][j_h - 1] = 0.5 * vec_2h_acc[0][j_h / 2 - 1];								//Top Boundary Nodes
+				vec_h_acc[j_h - 1][0] = 0.5 * vec_2h_acc[j_h / 2 - 1][0];								//Left Boundary Nodes
+				vec_h_acc[vec_h_dim - 1][j_h - 1] = 0.5 * vec_2h_acc[vec_2h_dim - 1][j_h / 2 - 1];		// Bottom Boundary Nodes
+				vec_h_acc[j_h - 1][vec_h_dim - 1] = 0.5 * vec_2h_acc[j_h / 2 - 1][vec_2h_dim - 1];		//Right Boundary Nodes
+				});
+
+			//parallel loop for processing only the odd numbered boundary nodes (index = node_number -1) of the structured domain
+
+			h.parallel_for(range<1>{num_odd_per_dim}, [=](id<1>idx) {
+				int j_h = idx[0] * 2 + 3;
+				int j_2h = (j_h - 1) / 2;
+				vec_h_acc[0][j_h - 1] = 0.25 * (vec_2h_acc[0][j_2h - 1] + vec_2h_acc[0][j_2h - 1]);										//Top Boundary Nodes
+				vec_h_acc[j_h - 1][0] = 0.25 * (vec_2h_acc[j_2h - 1][0] + vec_2h_acc[j_2h - 1][0]);										//Left Boundary Nodes
+				vec_h_acc[vec_h_dim - 1][j_h - 1] = 0.25 * (vec_2h_acc[vec_2h_dim - 1][j_2h - 1] + vec_2h_acc[vec_2h_dim - 1][j_2h]);	//Bottom Boundary Nodes
+				vec_h_acc[j_h - 1][vec_h_dim - 1] = 0.25 * (vec_2h_acc[j_2h - 1][vec_2h_dim - 1] + vec_2h_acc[j_2h][vec_2h_dim - 1]);	//Right Boundary Nodes
+				});
+
+			//Parallel loop for procesing even row even col nodes in the structured domain
+			h.parallel_for(range<2>{num_even_per_dim, num_even_per_dim}, [=](id<2>idx) {
+				int i_h = idx[0] * 2 + 2;
+				int j_h = idx[1] * 2 + 2;
+				vec_h_acc[i_h - 1][j_h - 1] = vec_2h_acc[i_h / 2 - 1][j_h / 2 - 1];
+				});
+			h.parallel_for(range<2>{num_odd_per_dim, num_even_per_dim}, [=](id<2>idx) {		//Odd row even col nodes in structured domain
+				int i_h = idx[0] * 2 + 3;
+				int j_h = idx[1] * 2 + 2;
+				int i_2h = (i_h - 1) / 2;
+				vec_h_acc[i_h - 1][j_h - 1] = 0.5 * (vec_2h_acc[i_2h - 1][j_h / 2 - 1] + vec_2h_acc[i_2h][j_h / 2 - 1]);
+				});
+			h.parallel_for(range<2>{num_even_per_dim, num_odd_per_dim}, [=](id<2>idx) {		//Even Row odd Cols nodes in Structured Domain
+				int i_h = idx[0] * 2 + 2;
+				int j_h = idx[1] * 2 + 3;
+				int j_2h = (j_h - 1) / 2;
+				vec_h_acc[i_h - 1][j_h - 1] = 0.5 * (vec_2h_acc[i_h / 2 - 1][j_2h - 1] + vec_2h_acc[i_h / 2 - 1][j_2h]);
+				});
+			h.parallel_for(range<2>{num_odd_per_dim, num_odd_per_dim}, [=](id<2>idx) {		//Both Odd Row and col nodes in Structured Domain
+				int i_h = idx[0] * 2 + 3;
+				int j_h = idx[1] * 2 + 3;
+				int i_2h = (i_h - 1) / 2;
+				int j_2h = (j_h - 1) / 2;
+				vec_h_acc[i_h - 1][j_h - 1] = 0.25 * (vec_2h_acc[i_2h - 1][j_2h - 1] + vec_2h_acc[i_2h][j_2h - 1] + vec_2h_acc[i_2h - 1][j_2h] + vec_2h_acc[i_2h][j_2h]);
+				});
+			});
+		q.wait();
+	}
+
+
+	return vec_h;
+}
+
 std::vector <float> Restriction2D(std::vector <float>& vec_h) {
 	int vec_h_dim = int(std::sqrt(vec_h.size()));
 	int vec_2h_dim = int((vec_h_dim - 1) / 2);
@@ -406,6 +476,34 @@ std::vector <float> Restriction2D(std::vector <float>& vec_h) {
 				4 * vec_h[(2 * i_2h - 1) * vec_h_dim + 2 * j_2h - 1]);
 		}
 	}
+	return vec_2h;
+}
+
+std::vector <float> Restriction2D_parallel(std::vector <float>& vec_h) {
+	int vec_h_dim = int(std::sqrt(vec_h.size()));
+	int vec_2h_dim = int((vec_h_dim - 1) / 2);
+	std::vector<float> vec_2h(vec_2h_dim * vec_2h_dim, 0);
+	cl::sycl::queue q;
+	{
+		buffer <float, 2> vec_2h_buf(vec_2h.data(), range<2>{vec_2h_dim, vec_2h_dim});
+		buffer <float, 2> vec_h_buf(vec_h.data(), range<2>{vec_h_dim, vec_h_dim});
+
+		//float* host_vector_2h = malloc_host<float>(vec_2h_dim, q);
+		q.submit([&](handler& h) {
+			accessor vec_2h_acc{ vec_2h_buf , h };
+			accessor vec_h_acc{ vec_h_buf , h };
+			h.parallel_for(range<2>{ vec_2h_dim, vec_2h_dim}, [=](id<2>idx) {
+				int i_2h = idx[0]; //0 to vec_2h_dim -1
+				int j_2h = idx[1]; //0 to vec_2h_dim -1
+				vec_2h_acc[i_2h][j_2h] = (1 / 16) * (vec_h_acc[2 * i_2h - 1][2 * j_2h - 1] + vec_h_acc[2 * i_2h - 1][2 * j_2h + 1]
+					+ vec_h_acc[2 * i_2h + 1][2 * j_2h - 1] + vec_h_acc[2 * i_2h + 1][2 * j_2h + 1] + 2 * (vec_h_acc[2 * i_2h][2 * j_2h - 1] +
+						vec_h_acc[2 * i_2h][2 * j_2h + 1] + vec_h_acc[2 * i_2h - 1][2 * j_2h] + vec_h_acc[2 * i_2h + 1][2 * j_2h]) +
+					4 * vec_h_acc[2 * i_2h][2 * j_2h]);
+				});
+			});
+		q.wait();
+	}
+
 	return vec_2h;
 }
 
