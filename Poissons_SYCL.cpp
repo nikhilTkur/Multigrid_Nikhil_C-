@@ -14,16 +14,6 @@
 using namespace sycl;
 using namespace oneapi::mkl::sparse;
 
-struct Matrix_Elements_for_Jacobi
-{
-	matrix_handle_t A_LU_handle;
-	matrix_handle_t A_D_handle;
-	matrix_handle_t R_omega_handle;
-	int size;
-
-};
-
-
 // Defining the parameters of MultiGrid.
 const int finest_level = 6;
 const int coarsest_level = 3;
@@ -31,6 +21,27 @@ int highest_size = int(std::pow(2, finest_level));
 const int mu0 = 30;
 const int mu1 = 15;
 const int mu2 = 15;
+
+struct Matrix_Elements_for_Jacobi
+{
+	matrix_handle_t A_D_handle;
+	//std::vector<float> A_diag;
+	matrix_handle_t A_LU_handle;
+	int size;
+};
+
+//Defining Global Matrices;
+std::vector <Matrix_Elements_for_Jacobi> jacobi_matrices(finest_level - coarsest_level + 1); // Matrices along with their sizes (sizes to be used for V Cycle and FMG Cycle)
+
+struct Mat_coo_data {
+	std::vector <int> rows_LU;
+	std::vector <int> cols_LU;
+	std::vector <float> vals_LU;
+	std::vector <int> rows_D;
+	std::vector <int> cols_D;
+	std::vector <float> vals_D;
+};
+std::vector<Mat_coo_data> global_matrices_coo_data(finest_level - coarsest_level + 1);
 
 struct csr_data
 {
@@ -71,15 +82,8 @@ csr_data coo_to_csr(const std::int32_t nrows, const std::int32_t ncols,
 
 		nnz_row[row]++;
 	}
-
 	return { data, indptr, indices };
 }
-
-
-
-
-//Defining Global Matrices;
-std::vector <Matrix_Elements_for_Jacobi> jacobi_matrices(finest_level - coarsest_level + 1); // Matrices along with their sizes (sizes to be used for V Cycle and FMG Cycle)
 
 //Define the Domain size of the problem
 const float domain_x = 1.0;
@@ -88,19 +92,27 @@ const float domain_y = 1.0;
 //Define the force vector of the Poissons Equation
 const float f = 4.0;
 
-std::vector<float> JacobiRelaxation(matrix_handle_t R_omega,matrix_handle_t A_D, int A_size, std::vector<float> &v, std::vector<float>&f, const int &mu , cl::sycl::queue &q) {
+std::vector<float> JacobiRelaxation(matrix_handle_t A_LU, int A_size, std::vector<float> &v, std::vector<float>&fh, const int &mu) {
 	//
+	cl::sycl::queue q;
 	const float omega = 2 / 3;
-	std::vector<float> v_temp(v.size(), 0);
-	std::vector<float> f_temp(v.size(), 0);
+	//std::vector<float> v_temp(v.size(), 0);
+	std::vector<float> fh_temp(fh.size(), 0);
+	std::vector <float> LU_v_temp(v.size(), 0);
+	std::vector <float> first_addn(v.size(), 0);
+
 	cl::sycl::event v_temp_done = cl::sycl::event();
-	cl::sycl::event f_temp_done = cl::sycl::event();
-	cl::sycl::event final_add_done = cl::sycl::event();
+	cl::sycl::event fh_temp_done = cl::sycl::event();
+	cl::sycl::event LU_v_temp_done = cl::sycl::event();
+	cl::sycl::event add_1_done = cl::sycl::event();
+	cl::sycl::event add_2_done = cl::sycl::event();
 	for (int i = 0; i < mu; i++) {
-		v_temp_done = gemv(q, oneapi::mkl::transpose::nontrans, 1.0, R_omega, v.data(), 0.0, v_temp.data(), {});
-		f_temp_done = gemv(q, oneapi::mkl::transpose::nontrans, omega / 4, A_D, f.data(), 0.0, f_temp.data(), {});
-		final_add_done = oneapi::mkl::vm::add(q, f.size(), v_temp.data(), f_temp.data(), v.data(), { v_temp_done , f_temp_done });
-		final_add_done.wait();
+		LU_v_temp_done = gemv(q, oneapi::mkl::transpose::nontrans, (-1.0 * omega / f), A_LU, v.data(), 0.0, LU_v_temp.data(), {});
+		v_temp_done = oneapi::mkl::blas::column_major::scal(q, v.size(), (1.0 - omega), v.data(), 1, {LU_v_temp_done});
+		fh_temp_done = oneapi::mkl::blas::column_major::scal(q, fh.size(), (omega / f), fh_temp.data(), 1, {});
+		add_1_done = oneapi::mkl::vm::add(q, fh.size(), v.data(), fh_temp.data(), first_addn.data(), { v_temp_done , fh_temp_done });
+		add_2_done = oneapi::mkl::vm::add(q, fh.size(), first_addn.data(), LU_v_temp.data(), v.data(), { add_1_done });
+		add_2_done.wait();
 	}
 	return v;
 }
@@ -159,7 +171,7 @@ std::unordered_set<int> boundary_nodes_indices(const int& size, const int&sqrt_s
 
 void GlobalStiffenssMatrix(int &mat_size, std::vector <int>& rows_LU, std::vector <int> &cols_LU, std::vector <float> &vals_LU,
 	std::vector <int> &rows_D, std::vector <int> &cols_D, std::vector <float>& vals_D) 
-{ // TODO
+{ 
 	int d_size = std::sqrt(mat_size) -1;
 	std::unordered_set<int> boundary_node_indices = boundary_nodes_indices(mat_size, d_size + 1);
 	float h = domain_x / d_size;
@@ -242,7 +254,6 @@ void GlobalStiffenssMatrix(int &mat_size, std::vector <int>& rows_LU, std::vecto
 
 std::vector <float> GlobalForceFunction() {
 	//int sqrt_global_vector_size = int(std::pow(2, finest_level)) + 1;
-
 
 	int nodes_per_row = highest_size + 1;
 	int global_vector_size = nodes_per_row * nodes_per_row;
@@ -382,7 +393,6 @@ std::vector<float> Interpolation2D(std::vector <float>& vec_2h) {
 
 		}
 	}
-
 	return vec_h;
 }
 
@@ -457,8 +467,6 @@ std::vector<float> Interpolation2D_parallel(std::vector <float>& vec_2h) {
 			});
 		q.wait();
 	}
-
-
 	return vec_h;
 }
 
@@ -503,25 +511,25 @@ std::vector <float> Restriction2D_parallel(std::vector <float>& vec_h) {
 			});
 		q.wait();
 	}
-
 	return vec_2h;
 }
 
-std::vector<float> VCycleMultigrid(Matrix_Elements_for_Jacobi &A_h, std::vector<float> &vec_h, std::vector<float> &f_h , sycl::queue &q) {
+std::vector<float> VCycleMultigrid(Matrix_Elements_for_Jacobi &A_h, std::vector<float> &vec_h, std::vector<float> &f_h) {
 
-	matrix_handle_t R_omega_handle = A_h.R_omega_handle;
-	matrix_handle_t A_D_handle = A_h.A_D_handle;
+	matrix_handle_t A_LU_hndl = A_h.A_LU_handle;
+	matrix_handle_t A_D_hndl = A_h.A_D_handle;
 	int A_size = A_h.size;
 	std::vector<float> vec_2h;
-	vec_h = JacobiRelaxation(R_omega_handle,A_D_handle, A_size, vec_h, f_h, mu1 , q);
+	vec_h = JacobiRelaxation(A_h.A_LU_handle, A_size, vec_h, f_h, mu1);
 
 	if (int(std::log2(std::sqrt(A_size) + 1)) == coarsest_level) {
 
-		vec_h = JacobiRelaxation(R_omega_handle, A_D_handle, A_size, vec_h, f_h, mu2,q);
+		vec_h = JacobiRelaxation(A_h.A_LU_handle, A_size, vec_h, f_h, mu2);
 		return vec_h;
 	}
 	else {
 		//calculating the residual for the current solution
+		sycl::queue q;
 		std::vector<float> temp_vec1(vec_h.size(), 0);
 		std::vector<float> temp_vec2(vec_h.size(), 0);
 		std::vector<float> result(vec_h.size(), 0);
@@ -536,7 +544,7 @@ std::vector<float> VCycleMultigrid(Matrix_Elements_for_Jacobi &A_h, std::vector<
 		cl::sycl::event result_addn_done = cl::sycl::event();
 		cl::sycl::event sub_done = cl::sycl::event();
 		gemv_LU_done = gemv(q, oneapi::mkl::transpose::nontrans, a, A_h.A_LU_handle, vec_h.data(), b, temp_vec1.data(), {});
-		gemv_D_done = gemv(q, oneapi::mkl::transpose::nontrans, a, A_D_handle, vec_h.data(), b, temp_vec2.data(), {});
+		gemv_D_done = gemv(q, oneapi::mkl::transpose::nontrans, a, A_h.A_D_handle, vec_h.data(), b, temp_vec2.data(), {});
 		result_addn_done = oneapi::mkl::vm::add(q, vec_h.size(), temp_vec1.data(), temp_vec2.data(), result.data(), { gemv_LU_done , gemv_D_done });
 		sub_done = oneapi::mkl::vm::sub(q, f_h.size(), f_h.data(), result.data(), residual.data(), { result_addn_done });
 		sub_done.wait();
@@ -547,63 +555,74 @@ std::vector<float> VCycleMultigrid(Matrix_Elements_for_Jacobi &A_h, std::vector<
 
 		//Fetching the Coarser Level Matrix
 		Matrix_Elements_for_Jacobi A_2h = jacobi_matrices[int(std::log2(std::sqrt(f_2h.size()) + 1)) - coarsest_level];
-		vec_2h = VCycleMultigrid(A_2h, vec_2h, f_2h, q);
+		vec_2h = VCycleMultigrid(A_2h, vec_2h, f_2h);
 	}
+	sycl::queue q;
 	std::vector<float> vec_2h_interpolation = Interpolation2D(vec_2h);
 	cl::sycl::event vec_h_addition = cl::sycl::event();
 	std::vector<float> vec_h_final(vec_h.size(), 0);
 	vec_h_addition = oneapi::mkl::vm::add(q, vec_h.size(), vec_h.data(), vec_2h_interpolation.data(), vec_h_final.data(), {});
 	vec_h_addition.wait();
-	vec_h_final = JacobiRelaxation(R_omega_handle, A_D_handle, A_size, vec_h, f_h, mu2,q);
+	vec_h_final = JacobiRelaxation(A_h.A_LU_handle, A_size, vec_h_final, f_h, mu2);
 	return vec_h_final;
 }
 
-std::vector<float> FullMultiGrid(Matrix_Elements_for_Jacobi& A_h, std::vector<float>& f_h, sycl::queue& q) {
+std::vector<float> FullMultiGrid(Matrix_Elements_for_Jacobi& A_h, std::vector<float>& f_h) {
 	std::vector<float> vec_h(f_h.size(), 0);
 	std::vector<float> vec_2h;
 	//matrix_handle_t A_handle = std::get<0>(A_h);
 	int A_size = A_h.size;
 	if (int(std::log2(std::sqrt(A_size) + 1)) == coarsest_level) {
 		for (int i = 0; i <= mu0; i++) {
-			vec_h = VCycleMultigrid(A_h, vec_h, f_h, q);
+			vec_h = VCycleMultigrid(A_h, vec_h, f_h);
 		}
 		return vec_h;
 	}
 	else {
 		std::vector<float> f_2h = Restriction2D(f_h);
 		Matrix_Elements_for_Jacobi A_2h = jacobi_matrices[int(std::log2(std::sqrt(f_2h.size()) + 1)) - coarsest_level];
-		vec_2h = FullMultiGrid(A_2h , f_2h , q);
+		vec_2h = FullMultiGrid(A_2h , f_2h);
 	}
 	vec_h = Interpolation2D(vec_2h);
 	for (int i = 0; i <= mu0; i++) {
-		vec_h = VCycleMultigrid(A_h, vec_h, f_h, q);
+		vec_h = VCycleMultigrid(A_h, vec_h, f_h);
 	}
 	return vec_h;
-	//Check if the level of the matrix is coarsest level
+}
+
+void inverse_diagonal(std::vector<float>& diag) {
+	for (int i = 0; i < diag.size(); i++) {
+		diag[i] = 1 / diag[i];
+	}
 }
 
 int main() {
-
-	matrix_handle_t* handle;
-	std::vector <matrix_handle_t*> vec;
-
-	//Obtain the global matrices
-
-
-		//
-
-
-	//obtain the global force function
-
-	//obtain the 
-
-	//Do prifiling
-
-
-		//convert the matrices in coo formats and transfer its handles to the FMG cycle
-
+		
+	//Creating the global matrices for different levels.
+	for (int level = coarsest_level; level <= finest_level; level++) {
+		int nodes_per_dim = std::pow(2, level) + 1;
+		int original_mat_size = nodes_per_dim * nodes_per_dim;
+		int non_bdry_mat_size = (nodes_per_dim -2) * (nodes_per_dim -2); //Generating only the matrix of non boundary elements
+		int index = level - coarsest_level;
+		GlobalStiffenssMatrix(original_mat_size, global_matrices_coo_data[index].rows_LU, global_matrices_coo_data[index].cols_LU, global_matrices_coo_data[index].vals_LU,
+			global_matrices_coo_data[index].rows_D, global_matrices_coo_data[index].cols_D, global_matrices_coo_data[index].vals_D);
+		csr_data csr_mat_LU = coo_to_csr(non_bdry_mat_size, non_bdry_mat_size, global_matrices_coo_data[index].rows_D.size(), global_matrices_coo_data[index].rows_LU,
+			global_matrices_coo_data[index].cols_LU, global_matrices_coo_data[index].vals_LU);
+		csr_data csr_mat_D = coo_to_csr(non_bdry_mat_size, non_bdry_mat_size, global_matrices_coo_data[index].rows_D.size(), global_matrices_coo_data[index].rows_D,
+			global_matrices_coo_data[index].cols_D, global_matrices_coo_data[index].vals_D);
+		matrix_handle_t A_LU;
+		matrix_handle_t A_D;
+		init_matrix_handle(&A_LU);
+		init_matrix_handle(&A_D);
+		set_csr_data(A_LU, non_bdry_mat_size, non_bdry_mat_size, oneapi::mkl::index_base::zero, csr_mat_LU.indptr.data(), csr_mat_LU.indices.data(), csr_mat_LU.data.data());
+		set_csr_data(A_D, non_bdry_mat_size, non_bdry_mat_size, oneapi::mkl::index_base::zero, csr_mat_D.indptr.data(), csr_mat_D.indices.data(), csr_mat_D.data.data());
+		//Considering for the structured grid with Triangle elements. we only need to have LU handle for jacobi as all diag entries of A = 4 so inv_diag = 1/4 direc
+		//incorporated in the constant of the spmv product.
+		
+		jacobi_matrices[index].A_LU_handle = A_LU;
+		jacobi_matrices[index].size = non_bdry_mat_size;
+		jacobi_matrices[index].A_D_handle = A_D;
+	}
+	std::vector<float> f_global = GlobalForceFunction();
+	std::vector<float> solution_finest = FullMultiGrid(jacobi_matrices[jacobi_matrices.size() - 1], f_global);
 }
-
-	
-
-
