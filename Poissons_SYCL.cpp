@@ -1,47 +1,46 @@
 #include <iostream>
-#include <CL/sycl.hpp>
+#include <cl/sycl.hpp>
 #include <vector>
 #include <numeric>
 #include "oneapi/mkl.hpp"
 #include "mkl.h"
 #include "mkl_spblas.h"
-#include "mkl_graph.h"
 #include <cmath>
-#include <tuple>
 #include <unordered_set>
+#include <cstdint>
 
 
 using namespace sycl;
 using namespace oneapi::mkl::sparse;
 
-// Defining the parameters of MultiGrid.
-const int finest_level = 6;
-const int coarsest_level = 3;
-int highest_size = int(std::pow(2, finest_level));
+// defining the parameters of multigrid.
+const int finest_level = 3;
+const int coarsest_level = 2;
+std::int32_t highest_size = std::int32_t(std::pow(2, finest_level));
 const int mu0 = 30;
-const int mu1 = 15;
-const int mu2 = 15;
+const int mu1 = 10;
+const int mu2 = 10;
 
-struct Matrix_Elements_for_Jacobi
+struct matrix_elements_for_jacobi
 {
-	matrix_handle_t A_D_handle;
-	//std::vector<float> A_diag;
-	matrix_handle_t A_LU_handle;
-	int size;
+	matrix_handle_t a_d_handle;
+	//std::vector<float> a_diag;
+	matrix_handle_t a_lu_handle;
+	std::int32_t size;
 };
 
-//Defining Global Matrices;
-std::vector <Matrix_Elements_for_Jacobi> jacobi_matrices(finest_level - coarsest_level + 1); // Matrices along with their sizes (sizes to be used for V Cycle and FMG Cycle)
+//defining global matrices;
+std::vector <matrix_elements_for_jacobi> jacobi_matrices(finest_level - coarsest_level + 1); // matrices along with their sizes (sizes to be used for v cycle and fmg cycle)
 
-struct Mat_coo_data {
-	std::vector <int> rows_LU;
-	std::vector <int> cols_LU;
-	std::vector <float> vals_LU;
-	std::vector <int> rows_D;
-	std::vector <int> cols_D;
-	std::vector <float> vals_D;
+struct mat_coo_data {
+	std::vector <std::int32_t> rows_lu;
+	std::vector <std::int32_t> cols_lu;
+	std::vector <float> vals_lu;
+	std::vector <std::int32_t> rows_d;
+	std::vector <std::int32_t> cols_d;
+	std::vector <float> vals_d;
 };
-std::vector<Mat_coo_data> global_matrices_coo_data(finest_level - coarsest_level + 1);
+std::vector<mat_coo_data> global_matrices_coo_data(finest_level - coarsest_level + 1);
 
 struct csr_data
 {
@@ -50,7 +49,7 @@ struct csr_data
 	std::vector<std::int32_t> indices;
 };
 
-// TODO: Parallel Kernel
+// todo: parallel kernel
 csr_data coo_to_csr(const std::int32_t nrows, const std::int32_t ncols,
 	const std::int32_t nnz, std::vector<std::int32_t> coo_row,
 	std::vector<std::int32_t> coo_col, std::vector<float> coo_data)
@@ -59,7 +58,7 @@ csr_data coo_to_csr(const std::int32_t nrows, const std::int32_t ncols,
 	std::vector<std::int32_t> indptr(nrows + 1);
 	std::vector<std::int32_t> indices(nnz);
 
-	// Compute number of non-zero entries per row of A
+	// compute number of non-zero entries per row of a
 	std::vector<std::int32_t> nnz_row(nrows);
 	for (std::int32_t i = 0; i < nnz; i++)
 		nnz_row[coo_row[i]]++;
@@ -85,33 +84,34 @@ csr_data coo_to_csr(const std::int32_t nrows, const std::int32_t ncols,
 	return { data, indptr, indices };
 }
 
-//Define the Domain size of the problem
+//define the domain size of the problem
 const float domain_x = 1.0;
 const float domain_y = 1.0;
 
-//Define the force vector of the Poissons Equation
+//define the force vector of the poissons equation
 const float f = 4.0;
 
-std::vector<float> JacobiRelaxation(matrix_handle_t A_LU, int A_size, std::vector<float> &v, std::vector<float>&fh, const int &mu) {
+std::vector<float> jacobirelaxation(matrix_handle_t a_lu, std::int32_t a_size, std::vector<float> &v, std::vector<float>&fh, const int &mu) {
 	//
 	cl::sycl::queue q;
 	const float omega = 2 / 3;
+	std::int32_t vec_size = v.size();
 	//std::vector<float> v_temp(v.size(), 0);
-	std::vector<float> fh_temp(fh.size(), 0);
-	std::vector <float> LU_v_temp(v.size(), 0);
-	std::vector <float> first_addn(v.size(), 0);
+	std::vector<float> fh_temp(vec_size, 0);
+	std::vector <float> lu_v_temp(vec_size, 0);
+	std::vector <float> first_addn(vec_size, 0);
 
 	cl::sycl::event v_temp_done = cl::sycl::event();
 	cl::sycl::event fh_temp_done = cl::sycl::event();
-	cl::sycl::event LU_v_temp_done = cl::sycl::event();
+	cl::sycl::event lu_v_temp_done = cl::sycl::event();
 	cl::sycl::event add_1_done = cl::sycl::event();
 	cl::sycl::event add_2_done = cl::sycl::event();
 	for (int i = 0; i < mu; i++) {
-		LU_v_temp_done = gemv(q, oneapi::mkl::transpose::nontrans, (-1.0 * omega / f), A_LU, v.data(), 0.0, LU_v_temp.data(), {});
-		v_temp_done = oneapi::mkl::blas::column_major::scal(q, v.size(), (1.0 - omega), v.data(), 1, {LU_v_temp_done});
-		fh_temp_done = oneapi::mkl::blas::column_major::scal(q, fh.size(), (omega / f), fh_temp.data(), 1, {});
-		add_1_done = oneapi::mkl::vm::add(q, fh.size(), v.data(), fh_temp.data(), first_addn.data(), { v_temp_done , fh_temp_done });
-		add_2_done = oneapi::mkl::vm::add(q, fh.size(), first_addn.data(), LU_v_temp.data(), v.data(), { add_1_done });
+		lu_v_temp_done = gemv(q, oneapi::mkl::transpose::nontrans, (-1.0 * omega / f), a_lu, v.data(), 0.0, lu_v_temp.data(), {});
+		v_temp_done = oneapi::mkl::blas::column_major::scal(q, vec_size, (1.0 - omega), v.data(), 1, {lu_v_temp_done});
+		fh_temp_done = oneapi::mkl::blas::column_major::scal(q, vec_size, (omega / f), fh_temp.data(), 1, {});
+		add_1_done = oneapi::mkl::vm::add(q, vec_size, v.data(), fh_temp.data(), first_addn.data(), { v_temp_done , fh_temp_done });
+		add_2_done = oneapi::mkl::vm::add(q, vec_size, first_addn.data(), lu_v_temp.data(), v.data(), { add_1_done });
 		add_2_done.wait();
 	}
 	return v;
@@ -128,82 +128,82 @@ std::vector<float> triangle_element_stiffness_matrix(float &x1, float  &x2, floa
 	float aplha_3 = x1 * y2 - x2 * y1;
 	float beta_3 = y1 - y2;
 	float gamma_3 = -1 * (x1 - x2);
-	float Ae = (aplha_1 + aplha_2 + aplha_3) / 2.0;    // Calculating the area of the triangular element
+	float ae = (aplha_1 + aplha_2 + aplha_3) / 2.0;    // calculating the area of the triangular element
 
-	std::vector <float> K_element(9, 0.0);
-	K_element[0] = (beta_1 * beta_1 + gamma_1 * gamma_1) / (4 * Ae); //row 1
-	K_element[1] = (beta_1 * beta_2 + gamma_1 * gamma_2) / (4 * Ae);
-	K_element[2] = (beta_1 * beta_3 + gamma_1 * gamma_3) / (4 * Ae);
-	K_element[3] = (beta_2 * beta_1 + gamma_2 * gamma_1) / (4 * Ae); //row2
-	K_element[4] = (beta_2 * beta_2 + gamma_2 * gamma_2) / (4 * Ae);
-	K_element[5] = (beta_2 * beta_3 + gamma_2 * gamma_3) / (4 * Ae);
-	K_element[6] = (beta_3 * beta_1 + gamma_3 * gamma_1) / (4 * Ae); //row 3
-	K_element[7] = (beta_3 * beta_2 + gamma_3 * gamma_2) / (4 * Ae);
-	K_element[8] = (beta_3 * beta_3 + gamma_3 * gamma_3) / (4 * Ae);
+	std::vector <float> k_element(9, 0.0);
+	k_element[0] = (beta_1 * beta_1 + gamma_1 * gamma_1) / (4 * ae); //row 1
+	k_element[1] = (beta_1 * beta_2 + gamma_1 * gamma_2) / (4 * ae);
+	k_element[2] = (beta_1 * beta_3 + gamma_1 * gamma_3) / (4 * ae);
+	k_element[3] = (beta_2 * beta_1 + gamma_2 * gamma_1) / (4 * ae); //row2
+	k_element[4] = (beta_2 * beta_2 + gamma_2 * gamma_2) / (4 * ae);
+	k_element[5] = (beta_2 * beta_3 + gamma_2 * gamma_3) / (4 * ae);
+	k_element[6] = (beta_3 * beta_1 + gamma_3 * gamma_1) / (4 * ae); //row 3
+	k_element[7] = (beta_3 * beta_2 + gamma_3 * gamma_2) / (4 * ae);
+	k_element[8] = (beta_3 * beta_3 + gamma_3 * gamma_3) / (4 * ae);
 
-	return K_element;
+	return k_element;
 }
 
 std::vector <float> force_function_element(float &x1, float  &x2, float  &x3, float  &y1, float  &y2, float  &y3) {
 	float aplha_1 = x2 * y3 - x3 * y2;
 	float aplha_2 = x3 * y1 - x1 * y3;
 	float aplha_3 = x1 * y2 - x2 * y1;
-	float Ae = (aplha_1 + aplha_2 + aplha_3) / 2.0;    // Calculating the area of the triangular element
+	float ae = (aplha_1 + aplha_2 + aplha_3) / 2.0;    // calculating the area of the triangular element
 
 	std::vector<float> f_element(3,0);
-	f_element[0] = f * Ae / 3;
-	f_element[1] = f * Ae / 3;
-	f_element[2] = f * Ae / 3;
+	f_element[0] = f * ae / 3;
+	f_element[1] = f * ae / 3;
+	f_element[2] = f * ae / 3;
 	return f_element;
 }
 
-std::unordered_set<int> boundary_nodes_indices(const int& size, const int&sqrt_size) {			//passing the size of the martix as the input
-	std::unordered_set<int> boundary_nodes;
+std::unordered_set<std::int32_t> boundary_nodes_indices(const std::int32_t& size, const std::int32_t&sqrt_size) {			//passing the size of the martix as the input
+	std::unordered_set<std::int32_t> boundary_nodes;
 
-	for (int i = 0; i <= sqrt_size; i++) {
+	for (std::int32_t i = 0; i <= sqrt_size; i++) {
 		boundary_nodes.insert({i , size-1 -i});
 	}
-	for (int i = 2 * sqrt_size - 1; i <= size - sqrt_size - 1; i = i + sqrt_size) {
+	for (std::int32_t i = 2 * sqrt_size - 1; i <= size - sqrt_size - 1; i = i + sqrt_size) {
 		boundary_nodes.insert({ i , i + 1 });
 	}
 	return boundary_nodes;
 }
 
-void GlobalStiffenssMatrix(int &mat_size, std::vector <int>& rows_LU, std::vector <int> &cols_LU, std::vector <float> &vals_LU,
-	std::vector <int> &rows_D, std::vector <int> &cols_D, std::vector <float>& vals_D) 
+void globalstiffenssmatrix(std::int32_t &mat_size, std::vector <std::int32_t>& rows_lu, std::vector <std::int32_t> &cols_lu, std::vector <float> &vals_lu,
+	std::vector <std::int32_t> &rows_d, std::vector <std::int32_t> &cols_d, std::vector <float>& vals_d)
 { 
-	int d_size = std::sqrt(mat_size) -1;
-	std::unordered_set<int> boundary_node_indices = boundary_nodes_indices(mat_size, d_size + 1);
+	std::int32_t d_size = std::sqrt(mat_size) -1;
+	std::unordered_set<std::int32_t> boundary_node_indices = boundary_nodes_indices(mat_size, d_size + 1);
 	float h = domain_x / d_size;
 
-	//Looping for the odd elements in the domain
-	int odd_elements = 1;
-	for (int i = 1; i <= d_size; i++) {
-		for (int j = 1; j <= 2 * d_size; j = j + 2) {
+	//looping for the odd elements in the domain
+	std::int32_t odd_elements = 1;
+	for (std::int32_t i = 1; i <= d_size; i++) {
+		for (std::int32_t j = 1; j <= 2 * d_size; j = j + 2) {
 			float x1 = ((j - 1) * h) / 2;
 			float x2 = x1;
 			float x3 = ((j + 1) * h) / 2;
 			float y1 = (i - 1) * h;
 			float y2 = i * h;
 			float y3 = y2;
-			std::vector<float>Ke = triangle_element_stiffness_matrix(x1, x2, x3, y1, y2, y3);
-			std::vector <int> row_indices_global = {(odd_elements+1)/2 + i -2 ,(odd_elements + 1) / 2 + i - 2 , (odd_elements + 1) / 2 + i - 2 , (odd_elements + 1) / 2 + i + d_size - 1 ,(odd_elements + 1) / 2 + i + d_size - 1 ,(odd_elements + 1) / 2 + i + d_size - 1, (odd_elements + 1) / 2 + i + d_size ,(odd_elements + 1) / 2 + i + d_size ,(odd_elements + 1) / 2 + i + d_size };
-			std::vector <int> col_indices_global = { (odd_elements + 1) / 2 + i -2, (odd_elements + 1)/2 + i + d_size-1 , (odd_elements + 1) / 2 + i + d_size ,(odd_elements + 1) / 2 + i - 2, (odd_elements + 1) / 2 + i + d_size - 1 , (odd_elements + 1) / 2 + i + d_size ,(odd_elements + 1) / 2 + i - 2, (odd_elements + 1) / 2 + i + d_size - 1 , (odd_elements + 1) / 2 + i + d_size };
+			std::vector<float>ke = triangle_element_stiffness_matrix(x1, x2, x3, y1, y2, y3);
+			std::vector <std::int32_t> row_indices_global = {(odd_elements+1)/2 + i -2 ,(odd_elements + 1) / 2 + i - 2 , (odd_elements + 1) / 2 + i - 2 , (odd_elements + 1) / 2 + i + d_size - 1 ,(odd_elements + 1) / 2 + i + d_size - 1 ,(odd_elements + 1) / 2 + i + d_size - 1, (odd_elements + 1) / 2 + i + d_size ,(odd_elements + 1) / 2 + i + d_size ,(odd_elements + 1) / 2 + i + d_size };
+			std::vector <std::int32_t> col_indices_global = { (odd_elements + 1) / 2 + i -2, (odd_elements + 1)/2 + i + d_size-1 , (odd_elements + 1) / 2 + i + d_size ,(odd_elements + 1) / 2 + i - 2, (odd_elements + 1) / 2 + i + d_size - 1 , (odd_elements + 1) / 2 + i + d_size ,(odd_elements + 1) / 2 + i - 2, (odd_elements + 1) / 2 + i + d_size - 1 , (odd_elements + 1) / 2 + i + d_size };
 			
 			// loop to only include the non boundary elements in the stiffness matrix
 			
-			for (int k = 0; k < 9; k++) { 
+			for (std::int32_t k = 0; k < 9; k++) {
 				if (boundary_node_indices.find(row_indices_global[k]) == boundary_node_indices.end() && boundary_node_indices.find(col_indices_global[k]) == boundary_node_indices.end()) {
-					//check if the entry is on the diagonal or LU
+					//check if the entry is on the diagonal or lu
 					if (row_indices_global[k] == col_indices_global[k]) {
-						rows_D.push_back(row_indices_global[k] - (d_size + 2) - std::floor((row_indices_global[k] - (d_size + 2)) / (d_size + 1)) * 2);
-						cols_D.push_back(col_indices_global[k] - (d_size + 2) - std::floor((col_indices_global[k] - (d_size + 2)) / (d_size + 1)) * 2);
-						vals_D.push_back(Ke[k]);
+						rows_d.push_back(row_indices_global[k] - (d_size + 2) - std::floor((row_indices_global[k] - (d_size + 2)) / (d_size + 1)) * 2);
+						cols_d.push_back(col_indices_global[k] - (d_size + 2) - std::floor((col_indices_global[k] - (d_size + 2)) / (d_size + 1)) * 2);
+						vals_d.push_back(ke[k]);
 					}
 					else {
-						rows_LU.push_back(row_indices_global[k] - (d_size + 2) - std::floor((row_indices_global[k] - (d_size + 2)) / (d_size + 1)) * 2);
-						cols_LU.push_back(col_indices_global[k] - (d_size + 2) - std::floor((col_indices_global[k] - (d_size + 2)) / (d_size + 1)) * 2);
-						vals_LU.push_back(Ke[k]);
+						rows_lu.push_back(row_indices_global[k] - (d_size + 2) - std::floor((row_indices_global[k] - (d_size + 2)) / (d_size + 1)) * 2);
+						cols_lu.push_back(col_indices_global[k] - (d_size + 2) - std::floor((col_indices_global[k] - (d_size + 2)) / (d_size + 1)) * 2);
+						vals_lu.push_back(ke[k]);
 						
 					}
 				}
@@ -214,35 +214,35 @@ void GlobalStiffenssMatrix(int &mat_size, std::vector <int>& rows_LU, std::vecto
 		}
 	}
 
-	//Looping for the even elements in the domain
-	int even_elements = 2;	
-	for (int i = 1; i <= d_size; i++) {
-		for (int j = 2; j <= 2 * d_size; j = j + 2) {
+	//looping for the even elements in the domain
+	std::int32_t even_elements = 2;
+	for (std::int32_t i = 1; i <= d_size; i++) {
+		for (std::int32_t j = 2; j <= 2 * d_size; j = j + 2) {
 			float x1 = (j * h) / 2;
 			float x2 = x1;
 			float x3 = ((j - 2) * h) / 2;
 			float y1 = i * h;
 			float y2 = (i-1) * h;
 			float y3 = y2;
-			std::vector<float>Ke = triangle_element_stiffness_matrix(x1, x2, x3, y1, y2, y3);
-			std::vector <int> row_indices_global = { even_elements / 2 + i + d_size , even_elements / 2 + i + d_size, even_elements / 2 + i + d_size , even_elements / 2 + i - 1 ,even_elements / 2 + i - 1 , even_elements / 2 + i - 1 , even_elements / 2 + i -2 ,even_elements / 2 + i - 2 , even_elements / 2 + i - 2 };
-			std::vector <int> col_indices_global = { even_elements / 2 + i + d_size , even_elements / 2 + i - 1 , even_elements / 2 + i - 2 ,even_elements / 2 + i + d_size , even_elements / 2 + i - 1 , even_elements / 2 + i - 2 ,even_elements / 2 + i + d_size , even_elements / 2 + i - 1 , even_elements / 2 + i - 2 };
+			std::vector<float>ke = triangle_element_stiffness_matrix(x1, x2, x3, y1, y2, y3);
+			std::vector <std::int32_t> row_indices_global = { even_elements / 2 + i + d_size , even_elements / 2 + i + d_size, even_elements / 2 + i + d_size , even_elements / 2 + i - 1 ,even_elements / 2 + i - 1 , even_elements / 2 + i - 1 , even_elements / 2 + i -2 ,even_elements / 2 + i - 2 , even_elements / 2 + i - 2 };
+			std::vector <std::int32_t> col_indices_global = { even_elements / 2 + i + d_size , even_elements / 2 + i - 1 , even_elements / 2 + i - 2 ,even_elements / 2 + i + d_size , even_elements / 2 + i - 1 , even_elements / 2 + i - 2 ,even_elements / 2 + i + d_size , even_elements / 2 + i - 1 , even_elements / 2 + i - 2 };
 
 
 			// loop to only include the non boundary elements in the stiffness matrix
 
-			for (int k = 0; k < 9; k++) {
+			for (std::int32_t k = 0; k < 9; k++) {
 				if (boundary_node_indices.find(row_indices_global[k]) == boundary_node_indices.end() && boundary_node_indices.find(col_indices_global[k]) == boundary_node_indices.end()) {
-					//check if the entry is on the diagonal or LU
+					//check if the entry is on the diagonal or lu
 					if (row_indices_global[k] == col_indices_global[k]) {
-						rows_D.push_back(row_indices_global[k] - (d_size + 2) - std::floor((row_indices_global[k] - (d_size + 2)) / (d_size + 1)) * 2);
-						cols_D.push_back(col_indices_global[k] - (d_size + 2) - std::floor((col_indices_global[k] - (d_size + 2)) / (d_size + 1)) * 2);
-						vals_D.push_back(Ke[k]);
+						rows_d.push_back(row_indices_global[k] - (d_size + 2) - std::floor((row_indices_global[k] - (d_size + 2)) / (d_size + 1)) * 2);
+						cols_d.push_back(col_indices_global[k] - (d_size + 2) - std::floor((col_indices_global[k] - (d_size + 2)) / (d_size + 1)) * 2);
+						vals_d.push_back(ke[k]);
 					}
 					else {
-						rows_LU.push_back(row_indices_global[k] - (d_size + 2) - std::floor((row_indices_global[k] - (d_size + 2)) / (d_size + 1)) * 2);
-						cols_LU.push_back(col_indices_global[k] - (d_size + 2) - std::floor((col_indices_global[k] - (d_size + 2)) / (d_size + 1)) * 2);
-						vals_LU.push_back(Ke[k]);
+						rows_lu.push_back(row_indices_global[k] - (d_size + 2) - std::floor((row_indices_global[k] - (d_size + 2)) / (d_size + 1)) * 2);
+						cols_lu.push_back(col_indices_global[k] - (d_size + 2) - std::floor((col_indices_global[k] - (d_size + 2)) / (d_size + 1)) * 2);
+						vals_lu.push_back(ke[k]);
 
 					}
 				}
@@ -252,19 +252,19 @@ void GlobalStiffenssMatrix(int &mat_size, std::vector <int>& rows_LU, std::vecto
 	}
 }
 
-std::vector <float> GlobalForceFunction() {
+std::vector <float> globalforcefunction() {
 	//int sqrt_global_vector_size = int(std::pow(2, finest_level)) + 1;
 
-	int nodes_per_row = highest_size + 1;
-	int global_vector_size = nodes_per_row * nodes_per_row;
-	std::unordered_set<int> boundary_node_indices_finest = boundary_nodes_indices(global_vector_size, nodes_per_row); //To check if the node entry in the global force vector is a boundary one or not. If boundary, it is skipped
+	std::int32_t nodes_per_row = highest_size + 1;
+	std::int32_t global_vector_size = nodes_per_row * nodes_per_row;
+	std::unordered_set<std::int32_t> boundary_node_indices_finest = boundary_nodes_indices(global_vector_size, nodes_per_row); //to check if the node entry in the global force vector is a boundary one or not. if boundary, it is skipped
 	float h = domain_x / (highest_size);
 	
 	std::vector<float> global_force_vector(global_vector_size - 4*nodes_per_row + 4 , 0.0);
-	int odd_element = 1;
-	for (int i = 1; i <= highest_size; i++) {
+	std::int32_t odd_element = 1;
+	for (std::int32_t i = 1; i <= highest_size; i++) {
 
-		for (int j = 1; j <= 2 * highest_size; j = j + 2) {
+		for (std::int32_t j = 1; j <= 2 * highest_size; j = j + 2) {
 
 			float x1 = ((j - 1) * h) / 2;
 			float x2 = x1;
@@ -273,8 +273,8 @@ std::vector <float> GlobalForceFunction() {
 			float y2 = i * h;
 			float y3 = y2;
 			std::vector<float> fe = force_function_element(x1, x2, x3, y1, y2, y3);
-			std::vector<int> node_indices_finest = { (odd_element + 1) / 2 + i - 2 ,(odd_element + 1) / 2 + i + highest_size - 1,(odd_element + 1) / 2 + highest_size + i };
-			for (int k = 0; k < 3; k++) {
+			std::vector<std::int32_t> node_indices_finest = { (odd_element + 1) / 2 + i - 2 ,(odd_element + 1) / 2 + i + highest_size - 1,(odd_element + 1) / 2 + highest_size + i };
+			for (std::int32_t k = 0; k < 3; k++) {
 				if (boundary_node_indices_finest.find(node_indices_finest[k]) == boundary_node_indices_finest.end()) {
 					global_force_vector[node_indices_finest[k] - (highest_size + 2) - std::floor((node_indices_finest[k] - (highest_size + 2)) / (highest_size + 1)) * 2] += fe[k];
 				}
@@ -282,10 +282,10 @@ std::vector <float> GlobalForceFunction() {
 			odd_element += 2;
 		}
 	}
-	int even_element = 2;
-	for (int i = 1; i <= highest_size; i++) {
+	std::int32_t even_element = 2;
+	for (std::int32_t i = 1; i <= highest_size; i++) {
 
-		for (int j = 2; j <= 2 * highest_size; j = j + 2) {
+		for (std::int32_t j = 2; j <= 2 * highest_size; j = j + 2) {
 
 			float x1 = (j * h) / 2;
 			float x2 = x1;
@@ -294,8 +294,8 @@ std::vector <float> GlobalForceFunction() {
 			float y2 = (i - 1) * h;
 			float y3 = y2;
 			std::vector<float> fe = force_function_element(x1, x2, x3, y1, y2, y3);
-			std::vector<int> node_indices_finest = { even_element / 2 + i + highest_size ,even_element / 2 + i - 1,even_element / 2 + i - 2 };
-			for (int k = 0; k < 3; k++) {
+			std::vector<std::int32_t> node_indices_finest = { even_element / 2 + i + highest_size ,even_element / 2 + i - 1,even_element / 2 + i - 2 };
+			for (std::int32_t k = 0; k < 3; k++) {
 				if (boundary_node_indices_finest.find(node_indices_finest[k]) == boundary_node_indices_finest.end()) {
 					global_force_vector[node_indices_finest[k] - (highest_size + 2) - std::floor((node_indices_finest[k] - (highest_size + 2)) / (highest_size + 1)) * 2] += fe[k];
 				}
@@ -306,88 +306,88 @@ std::vector <float> GlobalForceFunction() {
 	return global_force_vector;
 }
 
-std::vector<float> Interpolation2D(std::vector <float>& vec_2h) {
-	int vec_2h_dim = int(std::sqrt(vec_2h.size()));
-	int vec_h_dim = 2 * vec_2h_dim + 1;
+std::vector<float> interpolation2d(std::vector <float>& vec_2h) {
+	std::int32_t vec_2h_dim = std::int32_t(std::sqrt(vec_2h.size()));
+	std::int32_t vec_h_dim = 2 * vec_2h_dim + 1;
 	std::vector<float> vec_h(vec_h_dim * vec_h_dim, 0);
 	vec_h[0] = 0.25 * vec_2h[0];
 	vec_h[vec_h_dim * vec_h_dim - 1] = 0.25 * vec_2h[vec_2h_dim * vec_2h_dim - 1];
 	vec_h[vec_h_dim - 1] =  0.25 * vec_2h[vec_2h_dim - 1];
 	vec_h[vec_h_dim * (vec_h_dim - 1)] = 0.25 * vec_2h[vec_2h_dim * (vec_2h_dim - 1)];
 	
-	//Looping over the topmost boundary of vec_h
-	for (int j_h = 2; j_h <= vec_h_dim - 1; j_h++) {
+	//looping over the topmost boundary of vec_h
+	for (std::int32_t j_h = 2; j_h <= vec_h_dim - 1; j_h++) {
 		//int dummy_j_h = j + 1;
 		if (j_h % 2 == 0) {
-			int j_2h = int(j_h / 2);
+			std::int32_t j_2h = j_h / 2;
 			vec_h[j_h - 1] = 0.5 * vec_2h[j_2h - 1];
 		}
 		else {
-			int j_2h = int((j_h - 1) / 2);
+			std::int32_t j_2h = (j_h - 1) / 2;
 			vec_h[j_h - 1] = 0.25 * (vec_2h[j_2h - 1] + vec_2h[j_2h]);
 		}
 	}
-	//Looping for the leftmost boundary of vec_h
+	//looping for the leftmost boundary of vec_h
 	for (int i_h = 2; i_h <= vec_h_dim - 1; i_h++) {
 		if (i_h % 2 == 0) {
-			int i_2h = int(i_h/2);
+			std::int32_t i_2h = i_h / 2;
 			vec_h[(i_h - 1) * vec_h_dim] = 0.5 * vec_2h[(i_2h - 1) * vec_2h_dim];
 		}
 		else {
-			int i_2h = int((i_h -1) / 2);
+			std::int32_t i_2h = (i_h -1) / 2;
 			vec_h[(i_h - 1) * vec_h_dim] = 0.25 * (vec_2h[(i_2h - 1) * vec_2h_dim] + vec_2h[(i_2h)*vec_2h_dim]);
 		}
 	}
-	//Looping for the bottommost boundary
-	for (int j_h = 2; j_h <= vec_h_dim - 1; j_h++) {
+	//looping for the bottommost boundary
+	for (std::int32_t j_h = 2; j_h <= vec_h_dim - 1; j_h++) {
 		if (j_h % 2 == 0) {
-			int j_2h = int(j_h/2);
+			std::int32_t j_2h = j_h / 2;
 			vec_h[vec_h_dim * (vec_h_dim - 1) + j_h - 1] = 0.5 * (vec_2h[vec_2h_dim * (vec_2h_dim -1) + j_2h -1]);
 		}
 		else {
-			int j_2h = int((j_h - 1) / 2);
+			std::int32_t j_2h = (j_h - 1) / 2;
 			vec_h[vec_h_dim * (vec_h_dim - 1) + j_h - 1] = 0.25 * (vec_2h[vec_2h_dim * (vec_2h_dim-1) + j_2h - 1] + vec_2h[vec_2h_dim * (vec_2h_dim - 1) + j_2h]);
 		}
 	}
-	//Looping for the rightmost boundary
-	for (int i_h = 2; i_h <= vec_h_dim - 1; i_h++) {
+	//looping for the rightmost boundary
+	for (std::int32_t i_h = 2; i_h <= vec_h_dim - 1; i_h++) {
 		if (i_h % 2 == 0) {
-			int i_2h = int(i_h /2);
+			std::int32_t i_2h = i_h / 2;
 			vec_h[(i_h-1) * vec_h_dim + vec_h_dim -1] = 0.5 * vec_2h[(i_2h - 1) * vec_2h_dim + vec_2h_dim - 1];
 		}
 		else {
-			int i_2h = int((i_h -1)/2);
+			std::int32_t i_2h = (i_h - 1) / 2;
 			vec_h[(i_h -1)* vec_h_dim + vec_h_dim -1] = 0.25 * (vec_2h[(i_2h -1) * vec_2h_dim + vec_2h_dim-1] + vec_2h[i_2h * vec_2h_dim + vec_2h_dim -1]);
 		}
 	}
 
-	//Looping for the remaining elements in the vec_h vector
-	for (int i_h = 2; i_h <= vec_h_dim - 1; i_h++) {
+	//looping for the remaining elements in the vec_h vector
+	for (std::int32_t i_h = 2; i_h <= vec_h_dim - 1; i_h++) {
 
-		for (int j_h = 2; j_h <= vec_h_dim - 1; j_h++) {
+		for (std::int32_t j_h = 2; j_h <= vec_h_dim - 1; j_h++) {
 
-			//Both Even
+			//both even
 			if (i_h % 2 == 0 && j_h % 2 == 0) {
-				int i_2h = int(i_h /2);
-				int j_2h = int(j_h / 2);
+				std::int32_t i_2h = i_h / 2;
+				std::int32_t j_2h = j_h / 2;
 				vec_h[(i_h - 1) * vec_h_dim + j_h - 1] = vec_2h[(i_2h - 1) * vec_2h_dim + j_2h - 1];
 			}
 			// i_h odd and j_h even
 			else if (i_h % 2 == 1 && j_h % 2 == 0) {
-				int i_2h = int((i_h - 1) / 2);
-				int j_2h = int(j_h / 2);
+				std::int32_t i_2h = (i_h - 1) / 2;
+				std::int32_t j_2h = j_h / 2;
 				vec_h[(i_h - 1) * vec_h_dim + j_h - 1] = 0.5 * (vec_2h[(i_2h - 1) * vec_2h_dim + j_2h - 1] + vec_2h[i_2h * vec_2h_dim + j_2h - 1]);
 			}
 			// i_h even and j_h odd
 			else if (i_h % 2 == 0 && j_h % 2 == 1) {
-				int i_2h = int(i_h / 2);
-				int j_2h = int((j_h - 1) / 2);
+				std::int32_t i_2h = i_h / 2;
+				std::int32_t j_2h = (j_h - 1) / 2;
 				vec_h[(i_h - 1) * vec_h_dim + j_h - 1] = 0.5 * (vec_2h[(i_2h - 1) * vec_2h_dim + j_2h - 1] + vec_2h[(i_2h - 1) * vec_2h_dim + j_2h]);
 			}
-			// Both odd
+			// both odd
 			else {
-				int i_2h = int((i_h - 1) / 2);
-				int j_2h = int((j_h - 1) / 2);
+				std::int32_t i_2h = (i_h - 1) / 2;
+				std::int32_t j_2h = (j_h - 1) / 2;
 				vec_h[(i_h - 1) * vec_h_dim + j_h - 1] = 0.25 * (vec_2h[(i_2h - 1) * vec_2h_dim + j_2h - 1] + vec_2h[i_2h * vec_2h_dim + j_2h - 1] + vec_2h[(i_2h - 1) * vec_2h_dim + j_2h] + vec_2h[i_2h * vec_2h_dim + j_2h]);
 			}
 
@@ -396,10 +396,10 @@ std::vector<float> Interpolation2D(std::vector <float>& vec_2h) {
 	return vec_h;
 }
 
-std::vector<float> Interpolation2D_parallel(std::vector <float>& vec_2h) {
+std::vector<float> interpolation2d_parallel(std::vector <float>& vec_2h) {
 	queue q;
-	int vec_2h_dim = int(std::sqrt(vec_2h.size()));
-	int vec_h_dim = 2 * vec_2h_dim + 1;
+	std::int32_t vec_2h_dim = std::sqrt(vec_2h.size());
+	std::int32_t vec_h_dim = 2 * vec_2h_dim + 1;
 	std::vector<float> vec_h(vec_h_dim * vec_h_dim, 0);
 	vec_h[0] = 0.25 * vec_2h[0];
 	vec_h[vec_h_dim * vec_h_dim - 1] = 0.25 * vec_2h[vec_2h_dim * vec_2h_dim - 1];
@@ -412,56 +412,56 @@ std::vector<float> Interpolation2D_parallel(std::vector <float>& vec_2h) {
 			accessor vec_h_acc{ vec_h_buf, h };
 			accessor vec_2h_acc{ vec_2h_buf , h };
 
-			//Domain has been divided such that the number of elements in each dimension is a power of 2. Hence the number of nodes in each dim is odd.
+			//domain has been divided such that the number of elements in each dimension is a power of 2. hence the number of nodes in each dim is odd.
 
-			int num_even_per_dim = (vec_h_dim - 1) / 2;
-			int num_odd_per_dim = num_even_per_dim - 1;
+			std::int32_t num_even_per_dim = (vec_h_dim - 1) / 2;
+			std::int32_t num_odd_per_dim = num_even_per_dim - 1;
 
 			//parallel loop for processing only the even numbered boundary nodes (index = node_number -1) of the structured domain
 
 			h.parallel_for(range<1>{num_even_per_dim}, [=](id<1>idx) {
-				int j_h = idx[0] * 2 + 2;
+				std::int32_t j_h = idx[0] * 2 + 2;
 				//int j_2h = int(j_h / 2);
-				vec_h_acc[0][j_h - 1] = 0.5 * vec_2h_acc[0][j_h / 2 - 1];								//Top Boundary Nodes
-				vec_h_acc[j_h - 1][0] = 0.5 * vec_2h_acc[j_h / 2 - 1][0];								//Left Boundary Nodes
-				vec_h_acc[vec_h_dim - 1][j_h - 1] = 0.5 * vec_2h_acc[vec_2h_dim - 1][j_h / 2 - 1];		// Bottom Boundary Nodes
-				vec_h_acc[j_h - 1][vec_h_dim - 1] = 0.5 * vec_2h_acc[j_h / 2 - 1][vec_2h_dim - 1];		//Right Boundary Nodes
+				vec_h_acc[0][j_h - 1] = 0.5 * vec_2h_acc[0][j_h / 2 - 1];								//top boundary nodes
+				vec_h_acc[j_h - 1][0] = 0.5 * vec_2h_acc[j_h / 2 - 1][0];								//left boundary nodes
+				vec_h_acc[vec_h_dim - 1][j_h - 1] = 0.5 * vec_2h_acc[vec_2h_dim - 1][j_h / 2 - 1];		// bottom boundary nodes
+				vec_h_acc[j_h - 1][vec_h_dim - 1] = 0.5 * vec_2h_acc[j_h / 2 - 1][vec_2h_dim - 1];		//right boundary nodes
 				});
 
 			//parallel loop for processing only the odd numbered boundary nodes (index = node_number -1) of the structured domain
 
 			h.parallel_for(range<1>{num_odd_per_dim}, [=](id<1>idx) {
-				int j_h = idx[0] * 2 + 3;
-				int j_2h = (j_h - 1) / 2;
-				vec_h_acc[0][j_h - 1] = 0.25 * (vec_2h_acc[0][j_2h - 1] + vec_2h_acc[0][j_2h - 1]);										//Top Boundary Nodes
-				vec_h_acc[j_h - 1][0] = 0.25 * (vec_2h_acc[j_2h - 1][0] + vec_2h_acc[j_2h - 1][0]);										//Left Boundary Nodes
-				vec_h_acc[vec_h_dim - 1][j_h - 1] = 0.25 * (vec_2h_acc[vec_2h_dim - 1][j_2h - 1] + vec_2h_acc[vec_2h_dim - 1][j_2h]);	//Bottom Boundary Nodes
-				vec_h_acc[j_h - 1][vec_h_dim - 1] = 0.25 * (vec_2h_acc[j_2h - 1][vec_2h_dim - 1] + vec_2h_acc[j_2h][vec_2h_dim - 1]);	//Right Boundary Nodes
+				std::int32_t j_h = idx[0] * 2 + 3;
+				std::int32_t j_2h = (j_h - 1) / 2;
+				vec_h_acc[0][j_h - 1] = 0.25 * (vec_2h_acc[0][j_2h - 1] + vec_2h_acc[0][j_2h - 1]);										//top boundary nodes
+				vec_h_acc[j_h - 1][0] = 0.25 * (vec_2h_acc[j_2h - 1][0] + vec_2h_acc[j_2h - 1][0]);										//left boundary nodes
+				vec_h_acc[vec_h_dim - 1][j_h - 1] = 0.25 * (vec_2h_acc[vec_2h_dim - 1][j_2h - 1] + vec_2h_acc[vec_2h_dim - 1][j_2h]);	//bottom boundary nodes
+				vec_h_acc[j_h - 1][vec_h_dim - 1] = 0.25 * (vec_2h_acc[j_2h - 1][vec_2h_dim - 1] + vec_2h_acc[j_2h][vec_2h_dim - 1]);	//right boundary nodes
 				});
 
-			//Parallel loop for procesing even row even col nodes in the structured domain
+			//parallel loop for procesing even row even col nodes in the structured domain
 			h.parallel_for(range<2>{num_even_per_dim, num_even_per_dim}, [=](id<2>idx) {
-				int i_h = idx[0] * 2 + 2;
-				int j_h = idx[1] * 2 + 2;
+				std::int32_t i_h = idx[0] * 2 + 2;
+				std::int32_t j_h = idx[1] * 2 + 2;
 				vec_h_acc[i_h - 1][j_h - 1] = vec_2h_acc[i_h / 2 - 1][j_h / 2 - 1];
 				});
-			h.parallel_for(range<2>{num_odd_per_dim, num_even_per_dim}, [=](id<2>idx) {		//Odd row even col nodes in structured domain
-				int i_h = idx[0] * 2 + 3;
-				int j_h = idx[1] * 2 + 2;
-				int i_2h = (i_h - 1) / 2;
+			h.parallel_for(range<2>{num_odd_per_dim, num_even_per_dim}, [=](id<2>idx) {		//odd row even col nodes in structured domain
+				std::int32_t i_h = idx[0] * 2 + 3;
+				std::int32_t j_h = idx[1] * 2 + 2;
+				std::int32_t i_2h = (i_h - 1) / 2;
 				vec_h_acc[i_h - 1][j_h - 1] = 0.5 * (vec_2h_acc[i_2h - 1][j_h / 2 - 1] + vec_2h_acc[i_2h][j_h / 2 - 1]);
 				});
-			h.parallel_for(range<2>{num_even_per_dim, num_odd_per_dim}, [=](id<2>idx) {		//Even Row odd Cols nodes in Structured Domain
-				int i_h = idx[0] * 2 + 2;
-				int j_h = idx[1] * 2 + 3;
-				int j_2h = (j_h - 1) / 2;
+			h.parallel_for(range<2>{num_even_per_dim, num_odd_per_dim}, [=](id<2>idx) {		//even row odd cols nodes in structured domain
+				std::int32_t i_h = idx[0] * 2 + 2;
+				std::int32_t j_h = idx[1] * 2 + 3;
+				std::int32_t j_2h = (j_h - 1) / 2;
 				vec_h_acc[i_h - 1][j_h - 1] = 0.5 * (vec_2h_acc[i_h / 2 - 1][j_2h - 1] + vec_2h_acc[i_h / 2 - 1][j_2h]);
 				});
-			h.parallel_for(range<2>{num_odd_per_dim, num_odd_per_dim}, [=](id<2>idx) {		//Both Odd Row and col nodes in Structured Domain
-				int i_h = idx[0] * 2 + 3;
-				int j_h = idx[1] * 2 + 3;
-				int i_2h = (i_h - 1) / 2;
-				int j_2h = (j_h - 1) / 2;
+			h.parallel_for(range<2>{num_odd_per_dim, num_odd_per_dim}, [=](id<2>idx) {		//both odd row and col nodes in structured domain
+				std::int32_t i_h = idx[0] * 2 + 3;
+				std::int32_t j_h = idx[1] * 2 + 3;
+				std::int32_t i_2h = (i_h - 1) / 2;
+				std::int32_t j_2h = (j_h - 1) / 2;
 				vec_h_acc[i_h - 1][j_h - 1] = 0.25 * (vec_2h_acc[i_2h - 1][j_2h - 1] + vec_2h_acc[i_2h][j_2h - 1] + vec_2h_acc[i_2h - 1][j_2h] + vec_2h_acc[i_2h][j_2h]);
 				});
 			});
@@ -470,13 +470,13 @@ std::vector<float> Interpolation2D_parallel(std::vector <float>& vec_2h) {
 	return vec_h;
 }
 
-std::vector <float> Restriction2D(std::vector <float>& vec_h) {
-	int vec_h_dim = int(std::sqrt(vec_h.size()));
-	int vec_2h_dim = int((vec_h_dim - 1) / 2);
+std::vector <float> restriction2d(std::vector <float>& vec_h) {
+	std::int32_t vec_h_dim = std::sqrt(vec_h.size());
+	std::int32_t vec_2h_dim = (vec_h_dim - 1) / 2;
 	std::vector<float> vec_2h(vec_2h_dim * vec_2h_dim, 0);
-	for (int i_2h = 1; i_2h <= vec_2h_dim; i_2h++) {
+	for (std::int32_t i_2h = 1; i_2h <= vec_2h_dim; i_2h++) {
 
-		for (int j_2h = 1; j_2h <= vec_2h_dim; j_2h++) {
+		for (std::int32_t j_2h = 1; j_2h <= vec_2h_dim; j_2h++) {
 
 			vec_2h[(i_2h - 1) * vec_2h_dim + j_2h - 1] = (1 / 16) * (vec_h[(2 * i_2h - 1 - 1) * vec_h_dim + 2 * j_2h - 1 - 1] + vec_h[(2 * i_2h - 1 - 1) * vec_h_dim + 2 * j_2h]
 				+ vec_h[2 * i_2h * vec_h_dim + 2 * j_2h - 1 - 1] + vec_h[2 * i_2h * vec_h_dim + 2 * j_2h] + 2 * (vec_h[(2 * i_2h - 1) * vec_h_dim + 2 * j_2h - 1 - 1] +
@@ -487,9 +487,9 @@ std::vector <float> Restriction2D(std::vector <float>& vec_h) {
 	return vec_2h;
 }
 
-std::vector <float> Restriction2D_parallel(std::vector <float>& vec_h) {
-	int vec_h_dim = int(std::sqrt(vec_h.size()));
-	int vec_2h_dim = int((vec_h_dim - 1) / 2);
+std::vector <float> restriction2d_parallel(std::vector <float>& vec_h) {
+	std::int32_t vec_h_dim = std::sqrt(vec_h.size());
+	std::int32_t vec_2h_dim = (vec_h_dim - 1) / 2;
 	std::vector<float> vec_2h(vec_2h_dim * vec_2h_dim, 0);
 	cl::sycl::queue q;
 	{
@@ -501,8 +501,8 @@ std::vector <float> Restriction2D_parallel(std::vector <float>& vec_h) {
 			accessor vec_2h_acc{ vec_2h_buf , h };
 			accessor vec_h_acc{ vec_h_buf , h };
 			h.parallel_for(range<2>{ vec_2h_dim, vec_2h_dim}, [=](id<2>idx) {
-				int i_2h = idx[0]; //0 to vec_2h_dim -1
-				int j_2h = idx[1]; //0 to vec_2h_dim -1
+				std::int32_t i_2h = idx[0]; //0 to vec_2h_dim -1
+				std::int32_t j_2h = idx[1]; //0 to vec_2h_dim -1
 				vec_2h_acc[i_2h][j_2h] = (1 / 16) * (vec_h_acc[2 * i_2h - 1][2 * j_2h - 1] + vec_h_acc[2 * i_2h - 1][2 * j_2h + 1]
 					+ vec_h_acc[2 * i_2h + 1][2 * j_2h - 1] + vec_h_acc[2 * i_2h + 1][2 * j_2h + 1] + 2 * (vec_h_acc[2 * i_2h][2 * j_2h - 1] +
 						vec_h_acc[2 * i_2h][2 * j_2h + 1] + vec_h_acc[2 * i_2h - 1][2 * j_2h] + vec_h_acc[2 * i_2h + 1][2 * j_2h]) +
@@ -514,115 +514,118 @@ std::vector <float> Restriction2D_parallel(std::vector <float>& vec_h) {
 	return vec_2h;
 }
 
-std::vector<float> VCycleMultigrid(Matrix_Elements_for_Jacobi &A_h, std::vector<float> &vec_h, std::vector<float> &f_h) {
+std::vector<float> vcyclemultigrid(matrix_elements_for_jacobi &a_h, std::vector<float> &vec_h, std::vector<float> &f_h) {
 
-	matrix_handle_t A_LU_hndl = A_h.A_LU_handle;
-	matrix_handle_t A_D_hndl = A_h.A_D_handle;
-	int A_size = A_h.size;
+	matrix_handle_t a_lu_hndl = a_h.a_lu_handle;
+	matrix_handle_t a_d_hndl = a_h.a_d_handle;
+	std::int32_t a_size = a_h.size;
+	std::int32_t vec_size = vec_h.size();
 	std::vector<float> vec_2h;
-	vec_h = JacobiRelaxation(A_h.A_LU_handle, A_size, vec_h, f_h, mu1);
+	vec_h = jacobirelaxation(a_h.a_lu_handle, a_size, vec_h, f_h, mu1);
 
-	if (int(std::log2(std::sqrt(A_size) + 1)) == coarsest_level) {
+	if (int(std::log2(std::sqrt(a_size) + 1)) == coarsest_level) {
 
-		vec_h = JacobiRelaxation(A_h.A_LU_handle, A_size, vec_h, f_h, mu2);
+		vec_h = jacobirelaxation(a_h.a_lu_handle, a_size, vec_h, f_h, mu2);
 		return vec_h;
 	}
 	else {
 		//calculating the residual for the current solution
 		sycl::queue q;
-		std::vector<float> temp_vec1(vec_h.size(), 0);
-		std::vector<float> temp_vec2(vec_h.size(), 0);
-		std::vector<float> result(vec_h.size(), 0);
-		std::vector<float> residual(f_h.size(), 0);
+		std::vector<float> temp_vec1(vec_size, 0);
+		std::vector<float> temp_vec2(vec_size, 0);
+		std::vector<float> result(vec_size, 0);
+		std::vector<float> residual(vec_size, 0);
 		std::vector<float> f_2h;
 		const float a = 1.0;
 		const float b = 0.0;
 		//float* vec_ptr = vec_h.data();
 		//float* result_ptr = result.data();
-		cl::sycl::event gemv_LU_done = cl::sycl::event();
-		cl::sycl::event gemv_D_done = cl::sycl::event();
+		cl::sycl::event gemv_lu_done = cl::sycl::event();
+		cl::sycl::event gemv_d_done = cl::sycl::event();
 		cl::sycl::event result_addn_done = cl::sycl::event();
 		cl::sycl::event sub_done = cl::sycl::event();
-		gemv_LU_done = gemv(q, oneapi::mkl::transpose::nontrans, a, A_h.A_LU_handle, vec_h.data(), b, temp_vec1.data(), {});
-		gemv_D_done = gemv(q, oneapi::mkl::transpose::nontrans, a, A_h.A_D_handle, vec_h.data(), b, temp_vec2.data(), {});
-		result_addn_done = oneapi::mkl::vm::add(q, vec_h.size(), temp_vec1.data(), temp_vec2.data(), result.data(), { gemv_LU_done , gemv_D_done });
-		sub_done = oneapi::mkl::vm::sub(q, f_h.size(), f_h.data(), result.data(), residual.data(), { result_addn_done });
+		gemv_lu_done = gemv(q, oneapi::mkl::transpose::nontrans, a, a_h.a_lu_handle, vec_h.data(), b, temp_vec1.data(), {});
+		gemv_d_done = gemv(q, oneapi::mkl::transpose::nontrans, a, a_h.a_d_handle, vec_h.data(), b, temp_vec2.data(), {});
+		result_addn_done = oneapi::mkl::vm::add(q, vec_size, temp_vec1.data(), temp_vec2.data(), result.data(), { gemv_lu_done , gemv_d_done });
+		sub_done = oneapi::mkl::vm::sub(q, vec_size, f_h.data(), result.data(), residual.data(), { result_addn_done });
 		sub_done.wait();
 		
-		//Applying the restriction on the residual
-		f_2h = Restriction2D(residual);
-		vec_2h = std::vector<float> (f_2h.size(), 0);
+		//applying the restriction on the residual
+		f_2h = restriction2d(residual);
+		std::int32_t f_2h_size = f_2h.size();
+		vec_2h = std::vector<float> (f_2h_size, 0);
 
-		//Fetching the Coarser Level Matrix
-		Matrix_Elements_for_Jacobi A_2h = jacobi_matrices[int(std::log2(std::sqrt(f_2h.size()) + 1)) - coarsest_level];
-		vec_2h = VCycleMultigrid(A_2h, vec_2h, f_2h);
+		//fetching the coarser level matrix
+		matrix_elements_for_jacobi a_2h = jacobi_matrices[int(std::log2(std::sqrt(f_2h_size) + 1)) - coarsest_level];
+		vec_2h = vcyclemultigrid(a_2h, vec_2h, f_2h);
 	}
 	sycl::queue q;
-	std::vector<float> vec_2h_interpolation = Interpolation2D(vec_2h);
+	std::vector<float> vec_2h_interpolation = interpolation2d(vec_2h);
 	cl::sycl::event vec_h_addition = cl::sycl::event();
-	std::vector<float> vec_h_final(vec_h.size(), 0);
-	vec_h_addition = oneapi::mkl::vm::add(q, vec_h.size(), vec_h.data(), vec_2h_interpolation.data(), vec_h_final.data(), {});
+	std::vector<float> vec_h_final(vec_size, 0);
+	vec_h_addition = oneapi::mkl::vm::add(q, vec_size, vec_h.data(), vec_2h_interpolation.data(), vec_h_final.data(), {});
 	vec_h_addition.wait();
-	vec_h_final = JacobiRelaxation(A_h.A_LU_handle, A_size, vec_h_final, f_h, mu2);
+	vec_h_final = jacobirelaxation(a_h.a_lu_handle, a_size, vec_h_final, f_h, mu2);
 	return vec_h_final;
 }
 
-std::vector<float> FullMultiGrid(Matrix_Elements_for_Jacobi& A_h, std::vector<float>& f_h) {
+std::vector<float> fullmultigrid(matrix_elements_for_jacobi& a_h, std::vector<float>& f_h) {
 	std::vector<float> vec_h(f_h.size(), 0);
 	std::vector<float> vec_2h;
-	//matrix_handle_t A_handle = std::get<0>(A_h);
-	int A_size = A_h.size;
-	if (int(std::log2(std::sqrt(A_size) + 1)) == coarsest_level) {
-		for (int i = 0; i <= mu0; i++) {
-			vec_h = VCycleMultigrid(A_h, vec_h, f_h);
+	//matrix_handle_t a_handle = std::get<0>(a_h);
+	std::int32_t a_size = a_h.size;
+	if (std::int32_t(std::log2(std::sqrt(a_size) + 1)) == coarsest_level) {
+		for (std::int32_t i = 0; i <= mu0; i++) {
+			vec_h = vcyclemultigrid(a_h, vec_h, f_h);
 		}
 		return vec_h;
 	}
 	else {
-		std::vector<float> f_2h = Restriction2D(f_h);
-		Matrix_Elements_for_Jacobi A_2h = jacobi_matrices[int(std::log2(std::sqrt(f_2h.size()) + 1)) - coarsest_level];
-		vec_2h = FullMultiGrid(A_2h , f_2h);
+		std::vector<float> f_2h = restriction2d(f_h);
+		matrix_elements_for_jacobi a_2h = jacobi_matrices[int(std::log2(std::sqrt(f_2h.size()) + 1)) - coarsest_level];
+		vec_2h = fullmultigrid(a_2h , f_2h);
 	}
-	vec_h = Interpolation2D(vec_2h);
-	for (int i = 0; i <= mu0; i++) {
-		vec_h = VCycleMultigrid(A_h, vec_h, f_h);
+	vec_h = interpolation2d(vec_2h);
+	for (std::int32_t i = 0; i <= mu0; i++) {
+		vec_h = vcyclemultigrid(a_h, vec_h, f_h);
 	}
 	return vec_h;
 }
 
 void inverse_diagonal(std::vector<float>& diag) {
-	for (int i = 0; i < diag.size(); i++) {
+	for (std::int32_t i = 0; i < diag.size(); i++) {
 		diag[i] = 1 / diag[i];
 	}
 }
 
 int main() {
 		
-	//Creating the global matrices for different levels.
+	//creating the global matrices for different levels.
 	for (int level = coarsest_level; level <= finest_level; level++) {
-		int nodes_per_dim = std::pow(2, level) + 1;
-		int original_mat_size = nodes_per_dim * nodes_per_dim;
-		int non_bdry_mat_size = (nodes_per_dim -2) * (nodes_per_dim -2); //Generating only the matrix of non boundary elements
+		std::int32_t nodes_per_dim = std::pow(2, level) + 1;
+		std::int32_t original_mat_size = nodes_per_dim * nodes_per_dim;
+		std::int32_t non_bdry_mat_size = (nodes_per_dim -2) * (nodes_per_dim -2); //generating only the matrix of non boundary elements
 		int index = level - coarsest_level;
-		GlobalStiffenssMatrix(original_mat_size, global_matrices_coo_data[index].rows_LU, global_matrices_coo_data[index].cols_LU, global_matrices_coo_data[index].vals_LU,
-			global_matrices_coo_data[index].rows_D, global_matrices_coo_data[index].cols_D, global_matrices_coo_data[index].vals_D);
-		csr_data csr_mat_LU = coo_to_csr(non_bdry_mat_size, non_bdry_mat_size, global_matrices_coo_data[index].rows_D.size(), global_matrices_coo_data[index].rows_LU,
-			global_matrices_coo_data[index].cols_LU, global_matrices_coo_data[index].vals_LU);
-		csr_data csr_mat_D = coo_to_csr(non_bdry_mat_size, non_bdry_mat_size, global_matrices_coo_data[index].rows_D.size(), global_matrices_coo_data[index].rows_D,
-			global_matrices_coo_data[index].cols_D, global_matrices_coo_data[index].vals_D);
-		matrix_handle_t A_LU;
-		matrix_handle_t A_D;
-		init_matrix_handle(&A_LU);
-		init_matrix_handle(&A_D);
-		set_csr_data(A_LU, non_bdry_mat_size, non_bdry_mat_size, oneapi::mkl::index_base::zero, csr_mat_LU.indptr.data(), csr_mat_LU.indices.data(), csr_mat_LU.data.data());
-		set_csr_data(A_D, non_bdry_mat_size, non_bdry_mat_size, oneapi::mkl::index_base::zero, csr_mat_D.indptr.data(), csr_mat_D.indices.data(), csr_mat_D.data.data());
-		//Considering for the structured grid with Triangle elements. we only need to have LU handle for jacobi as all diag entries of A = 4 so inv_diag = 1/4 direc
+		globalstiffenssmatrix(original_mat_size, global_matrices_coo_data[index].rows_lu, global_matrices_coo_data[index].cols_lu, global_matrices_coo_data[index].vals_lu,
+			global_matrices_coo_data[index].rows_d, global_matrices_coo_data[index].cols_d, global_matrices_coo_data[index].vals_d);
+		csr_data csr_mat_lu = coo_to_csr(non_bdry_mat_size, non_bdry_mat_size, global_matrices_coo_data[index].rows_d.size(), global_matrices_coo_data[index].rows_lu,
+			global_matrices_coo_data[index].cols_lu, global_matrices_coo_data[index].vals_lu);
+		csr_data csr_mat_d = coo_to_csr(non_bdry_mat_size, non_bdry_mat_size, global_matrices_coo_data[index].rows_d.size(), global_matrices_coo_data[index].rows_d,
+			global_matrices_coo_data[index].cols_d, global_matrices_coo_data[index].vals_d);
+		matrix_handle_t a_lu;
+		matrix_handle_t a_d;
+		init_matrix_handle(&a_lu);
+		init_matrix_handle(&a_d);
+		set_csr_data(a_lu, non_bdry_mat_size, non_bdry_mat_size, oneapi::mkl::index_base::zero, csr_mat_lu.indptr.data(), csr_mat_lu.indices.data(), csr_mat_lu.data.data());
+		set_csr_data(a_d, non_bdry_mat_size, non_bdry_mat_size, oneapi::mkl::index_base::zero, csr_mat_d.indptr.data(), csr_mat_d.indices.data(), csr_mat_d.data.data());
+		//considering for the structured grid with triangle elements. we only need to have lu handle for jacobi as all diag entries of a = 4 so inv_diag = 1/4 direc
 		//incorporated in the constant of the spmv product.
 		
-		jacobi_matrices[index].A_LU_handle = A_LU;
+		jacobi_matrices[index].a_lu_handle = a_lu;
 		jacobi_matrices[index].size = non_bdry_mat_size;
-		jacobi_matrices[index].A_D_handle = A_D;
+		jacobi_matrices[index].a_d_handle = a_d;
 	}
-	std::vector<float> f_global = GlobalForceFunction();
-	std::vector<float> solution_finest = FullMultiGrid(jacobi_matrices[jacobi_matrices.size() - 1], f_global);
+	std::vector<float> f_global = globalforcefunction();
+	std::vector<float> solution_finest = fullmultigrid(jacobi_matrices[jacobi_matrices.size() - 1], f_global);
+	return 0;
 }
