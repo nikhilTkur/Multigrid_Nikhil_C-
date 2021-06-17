@@ -15,7 +15,7 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="Multigrid_function_wrapped.cpp">
+    <ClCompile Include="temp_wrapped.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="Multigrid_functions.cpp">

@@ -13,7 +13,7 @@
   <ItemGroup>
     <ClCompile Include="help.cpp" />
     <ClCompile Include="Multigrid_functions.cpp" />
-    <ClCompile Include="Multigrid_function_wrapped.cpp" />
+    <ClCompile Include="temp_wrapped.cpp" />
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>15.0</VCProjectVersion>
