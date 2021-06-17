@@ -9,26 +9,33 @@ TODO : Pybind
 #include <unordered_map>
 #include <cmath>
 #include <tuple>
+#include <pybind11/numpy.h>
+#include <pybind11/pybind11.h>
+#include <pybind11/stl_bind.h>
+#include <pybind11/stl.h>
+#include <pybind11/numpy.h>
+#include <pybind11/embed.h>
 
 using namespace sycl;
 using namespace oneapi::mkl::sparse;
+namespace py = pybind11;
 
-class ProblemVar {
-//Object of this class is specific to a problem and is initialized for each problem from Python interface.
-public:
-	Eigen::SparseMatrix<double> coarsest_level_matrix;
-	std::unordered_map<int, csr_matrix_elements> A_sp_dict;
-	std::unordered_map<int, csr_jacobi_elements> A_jacobi_sp_dict;
-	std::unordered_map<int, std::unordered_map<int, int>> topo_to_space_dict;
-	std::unordered_map<int, std::vector<double>> b_dict;
-	std::unordered_map<int, std::vector<std::tuple<int, int>>>parent_info_dict;
-	std::unordered_map<int, std::unordered_map<int, std::vector<int>>>coarse_grid_edges_dict;	
-};
+int coarsest_level = 0;
+int finest_level = 5;
+int mu0 = 2;
+int mu1 = 1;
+int mu2 = 1;
+float omega = 4 / 5;
 
-struct csr_jacobi_elements 
+struct csr_jacobi_elements
 {
 	csr_matrix_elements D_inv;
 	csr_matrix_elements R_omega;
+	csr_jacobi_elements() {}
+	csr_jacobi_elements(csr_matrix_elements&D_inv_ , csr_matrix_elements &R_omega_){
+		D_inv = D_inv_;
+		R_omega = R_omega_;
+	}
 };
 
 struct csr_matrix_elements
@@ -38,14 +45,73 @@ struct csr_matrix_elements
 	std::vector<double> values;
 	matrix_handle_t matrix_handle;
 	int size;
+	csr_matrix_elements() {}
+	csr_matrix_elements(py::array_t<int>& row_, py::array_t<int>& col_, py::array_t<double>& vals_, int& size_) {
+		row = std::vector<int> (row_.data(), row_.data() + row_.size());
+		col = std::vector<int> (col_.data(), col_.data() + col_.size());
+		values = std::vector<double> (vals_.data(), vals_.data() + vals_.size());
+		// Create a matrix entity
+		size = size_;
+		init_matrix_handle(&matrix_handle);
+		set_csr_data(matrix_handle, size, size, oneapi::mkl::index_base::zero, row.data(),
+			col.data(), values.data());
+	}
 };
 
-int coarsest_level = 0;
-int finest_level = 5;
-int mu0 = 2;
-int mu1 = 1;
-int mu2 = 1;
-float omega = 4 / 5;
+class ProblemVar {
+//Object of this class is specific to a problem and is initialized for each problem from Python interface.
+public:
+	Eigen::SparseMatrix<double> coarsest_level_matrix;
+	//std::unordered_map<int, csr_matrix_elements> A_sp_dict;
+	std::vector<csr_matrix_elements> A_sp_dict;
+	std::vector<csr_jacobi_elements> A_jacobi_sp_dict;
+	std::unordered_map<int, std::unordered_map<int, int>> topo_to_space_dict;
+	std::unordered_map<int, std::vector<double>> b_dict;
+	std::unordered_map<int, std::vector<std::vector<int>>>parent_info_dict;
+	std::unordered_map<int, std::unordered_map<int, std::vector<int>>>coarse_grid_edges_dict;
+
+	//Defining a constructor that takes in py::arrays and assigns it to above member variables
+	ProblemVar(Eigen::SparseMatrix<double>& coarsest_level_matrix_py, py::array_t<csr_matrix_elements>& A_sp_list_py,
+		py::array_t<csr_jacobi_elements>& A_jacobi_sp_list_py,
+		py::array_t<py::array_t<int>>& topo_to_space_list_py,
+		py::array_t<py::array_t<double>>& b_list_py,
+		py::array_t<py::array_t<py::array_t<int>>>& parent_info_list_py,
+		py::array_t<py::array_t<py::array_t<int>>>& coarse_grid_edges_list_py) {
+
+		coarsest_level_matrix = coarsest_level_matrix_py;
+		//assigning dicts of matrices
+		A_sp_dict = std::vector<csr_matrix_elements>(A_sp_list_py.data(), A_sp_list_py.data() + A_sp_list_py.size());
+		A_jacobi_sp_dict = std::vector<csr_jacobi_elements>(A_jacobi_sp_list_py.data() , A_jacobi_sp_list_py.data() +
+			A_jacobi_sp_list_py.size());
+		//initializing topo_to_space_dict
+
+		auto r1 = topo_to_space_list_py.mutable_unchecked(); // can now index over first py::array_t
+		for (int i = 0; i < topo_to_space_list_py.size(); i++) {
+			auto r2 = r1(i).mutable_unchecked(); // can now index over internal py::array_t as well
+			for (int j = 0; j < r2.size(); j++) {
+				topo_to_space_dict[i][j] = r2(j);
+			}
+		}
+		auto r3 = b_list_py.mutable_unchecked();
+		for (int i = 0; i < b_list_py.size(); i++) {
+			b_dict[i] = std::vector<double>(r3.data(), r3.data() + r3.size());
+		}
+		auto r4 = parent_info_list_py.mutable_unchecked();
+		for (int i = 0; i < parent_info_list_py.size(); i++) {
+			auto r5 = r4(i).mutable_unchecked();
+			for (int j = 0; j < r5.size(); j++) {
+				parent_info_dict[i][j] = std::vector<int>(r5(j).data(), r5(j).data() + r5(j).size());
+			}
+		}
+		auto r6 = coarse_grid_edges_list_py.mutable_unchecked();
+		for (int i = 0; i < coarse_grid_edges_list_py.size(); i++) {
+			auto r7 = r6(i).mutable_unchecked();
+			for (int j = 0; j < r7.size(); j++) {
+				coarse_grid_edges_dict[i][j] = std::vector<int>(r7(j).data(), r7(j).data() + r7(j).size());
+			}
+		}
+	}
+};
 					
 Eigen::SparseMatrix<double> coarse_matrix_assemble(std::vector<int>& cols, std::vector<int>& rows, 
 	std::vector<double>& vals, int &num_row) {
@@ -75,7 +141,7 @@ std::vector<double> direct_solver(Eigen::SparseMatrix<double>& sparse_matrix, st
 void jacobirelaxation(cl::sycl::queue &q, std::vector<double>& vec, std::vector<double> &b, ProblemVar &obj 
 	, int current_level) {
 	int size = vec.size();
-	std::vector<double> ans(size, 0.0);
+	//std::vector<double> ans(size, 0.0);
 	std::vector<double> prod_1(size, 0.0);
 	std::vector<double> prod_2(size, 0.0);
 
@@ -101,13 +167,13 @@ std::vector<double> interpolation2D(std::vector<double>vec_2h, ProblemVar &obj ,
 	std::vector<double> vec_h(vec_h_dim);
 	for (int i = 0; i < vec_h_dim; i++) {
 		int fine_space_dof = obj.topo_to_space_dict[target_level][i];
-		if (std::get<0>(obj.parent_info_dict[target_level][i]) == 0) {
+		if ((obj.parent_info_dict[target_level][i][0]) == 0) {
 			// Coarse topo dof and fine topo dof coincide
-			vec_h[fine_space_dof] = vec_2h[obj.topo_to_space_dict[target_level-1][std::get<1>(obj.parent_info_dict[target_level][i])]];
+			vec_h[fine_space_dof] = vec_2h[obj.topo_to_space_dict[target_level-1][(obj.parent_info_dict[target_level][i][1])]];
 		}
 		else {
 			//Fine dof lies on coarse edge
-			int edge_num = std::get<1>(obj.parent_info_dict[target_level][i]);
+			int edge_num = (obj.parent_info_dict[target_level][i][1]);
 			//Obtain corresponding edge vertices on topology
 			int coarse_dof_1 = obj.topo_to_space_dict[target_level - 1][obj.coarse_grid_edges_dict[target_level-1][edge_num][0]];
 			int coarse_dof_2 = obj.topo_to_space_dict[target_level - 1][obj.coarse_grid_edges_dict[target_level-1][edge_num][1]];
@@ -139,7 +205,7 @@ std::vector<double> vcyclemultigrid(cl::sycl::queue& q, ProblemVar &obj,
 		return vec_h;
 	}
 	else {
-		///////Perform one smoothing operation here first
+		//Perform one smoothing operation here first
 		jacobirelaxation(q, vec_h, f_h, obj, current_level);
 
 		std::vector<double> temp_vec1(vec_size, 0);
@@ -160,16 +226,14 @@ std::vector<double> vcyclemultigrid(cl::sycl::queue& q, ProblemVar &obj,
 	}
 	std::vector<double> vec_2h_interpolation = interpolation2D(vec_2h, obj,current_level);
 	cl::sycl::event vec_h_addition = cl::sycl::event();
-	std::vector<double> vec_h_final(vec_size, 0);
+	//std::vector<double> vec_h_final(vec_size, 0);
 	vec_h_addition = oneapi::mkl::vm::add(q, vec_size, vec_h.data(), vec_2h_interpolation.data(), 
-		vec_h_final.data(), {});
-	// Check if you can add vec = vec + vec_2h_interpolation here
+		vec_h.data(), {});
 	vec_h_addition.wait();
 
-	// Perform jacobi relaxation here 
-	//////////////////Check for the vec_h_final or vec_h directly
-	jacobirelaxation(q, vec_h_final, f_h, obj, current_level);
-	return vec_h_final;
+	// Perform jacobi relaxation here
+	jacobirelaxation(q, vec_h, f_h, obj, current_level);
+	return vec_h;
 }
 
 std::vector<double> fullmultigrid(cl::sycl::queue& q, ProblemVar &object, std::vector<double>& f_h , int current_level) {
