@@ -15,7 +15,13 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="Poissons_SYCL.cpp">
+    <ClCompile Include="Multigrid_function_wrapped.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="Multigrid_functions.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+    <ClCompile Include="help.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
   </ItemGroup>

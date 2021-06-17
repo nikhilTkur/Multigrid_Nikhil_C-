@@ -8,6 +8,8 @@
 #include <cmath>
 #include <unordered_set>
 #include <cstdint>
+#include "mkl_dss.h"
+#include "mkl_types.h"
 
 
 using namespace sycl;
