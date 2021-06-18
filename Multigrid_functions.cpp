@@ -113,8 +113,11 @@ public:
 	}
 };
 					
-Eigen::SparseMatrix<double> coarse_matrix_assemble(std::vector<int>& cols, std::vector<int>& rows, 
-	std::vector<double>& vals, int &num_row) {
+Eigen::SparseMatrix<double> coarse_matrix_assemble(py::array_t<int>& cols_, py::array_t<int>& rows_,
+	py::array_t<double>& vals_, int &num_row) {
+	std::vector<int> cols = std::vector<int>(cols_.data(), cols_.data() + cols_.size());
+	std::vector<int> rows = std::vector<int>(rows_.data(), rows_.data() + rows_.size());
+	std::vector<double> vals = std::vector<double>(vals_.data(), vals_.data() + vals_.size());
 	Eigen::SparseMatrix<double> sparse_mat(num_row, num_row);
 	sparse_mat.reserve(Eigen::VectorXi::Constant(num_row, 4));
 	for (int i = 0; i < rows.size()-1; i++) {
@@ -254,8 +257,23 @@ std::vector<double> fullmultigrid(cl::sycl::queue& q, ProblemVar &object, std::v
 	return vec_h;
 }
 
-std::vector<double> multigrid_solver(ProblemVar& object) {
+std::vector<double> solve(ProblemVar& object) {
 	cl::sycl::queue q;
 	std::vector<double> answer = fullmultigrid(q, object , object.b_dict[finest_level], finest_level );
 	return answer;
+}
+
+PYBIND11_MODULE(multigrid_solver, m) {
+	py::class_<csr_matrix_elements>(m, "csr_matrix_elememts")
+		.def(py::init<py::array_t<int>&, py::array_t<int>&, py::array_t<double>&, int&>());
+	py::class_<csr_jacobi_elements>(m, "csr_jacobi_elements")
+		.def(py::init<csr_matrix_elements&, csr_matrix_elements&>());
+	py::class_<ProblemVar>(m, "ProblemVar")
+		.def(py::init<Eigen::SparseMatrix<double>&,py::array_t<csr_matrix_elements>&,
+			py::array_t<csr_jacobi_elements>&,py::array_t<py::array_t<int>>&,
+			py::array_t<py::array_t<double>>&,py::array_t<py::array_t<py::array_t<int>>>&,
+			py::array_t<py::array_t<py::array_t<int>>>&>());
+	m.def("eigen_matrix_assemble", &coarse_matrix_assemble);
+	m.def("solve", &solve);
+
 }
