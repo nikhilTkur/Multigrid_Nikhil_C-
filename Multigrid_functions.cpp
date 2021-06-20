@@ -161,7 +161,6 @@ void jacobirelaxation(cl::sycl::queue &q, std::vector<double>& vec, std::vector<
 			{ R_V_mul_done , D_inv_F_done });
 		add_done.wait();
 	}
-	//Check if the vec gets assigned back to the same in the last statement or not!
 }
 
 std::vector<double> interpolation2D(std::vector<double>vec_2h, ProblemVar &obj , int target_level) {
@@ -186,14 +185,82 @@ std::vector<double> interpolation2D(std::vector<double>vec_2h, ProblemVar &obj ,
 	return vec_h;
 }
 
-//Define the restriction operator
-
-std::vector<double> restriction2D(std::vector<double>vec_h , ProblemVar &obj , int target_level) {
+std::vector<double> restriction2D(std::vector<double>vec_h, ProblemVar& obj, int target_level) {
 	int vec_h_dim = vec_h.size();
 	int vec_2h_dim = int(std::pow(((std::sqrt(vec_h_dim) - 1) / 2) + 1, 2));
 	std::vector<double> vec_2h(vec_2h_dim);
+
 	for (int i = 0; i < vec_2h_dim; i++) {
-		vec_2h[obj.topo_to_space_dict[target_level][i]] = vec_h[obj.topo_to_space_dict[target_level+1][i]];
+		vec_2h[obj.topo_to_space_dict[target_level][i]] = vec_h[obj.topo_to_space_dict[target_level + 1][i]];
+	}
+	return vec_2h;
+}
+
+std::vector<double> interpolation2D_parallel(cl::sycl::queue &q , std::vector<double>vec_2h, ProblemVar& obj, int target_level) {
+	size_t vec_2h_dim = vec_2h.size();
+	size_t vec_h_dim = size_t(std::pow(2 * (std::sqrt(vec_2h_dim) - 1) + 1, 2));
+	std::vector<double> vec_h(vec_h_dim);
+	{
+		buffer t_to_s_fine{ obj.topo_to_space_dict[target_level] };
+		buffer t_to_s_coarse{ obj.topo_to_space_dict[target_level - 1] };
+		buffer parent_info{ obj.parent_info_dict[target_level] };
+		buffer coarse_grid_edges{ obj.coarse_grid_edges_dict[target_level - 1] };
+		buffer vec_h_buf{ vec_h };
+		buffer vec_2h_buf{ vec_2h };
+
+		q.submit([&](handler& h) {
+			accessor vec_2h_acc{ vec_2h_buf , h };
+			accessor vec_h_acc{ vec_h_buf,h };
+			accessor t_s_fine{ t_to_s_fine,h };
+			accessor t_s_coarse{ t_to_s_coarse,h };
+			accessor parent_info_acc{ parent_info,h };
+			accessor coarse_edges{ coarse_grid_edges,h };
+
+			h.parallel_for(range<1>{vec_h_dim}, [=](id<1>idx) {
+				size_t fine_space_dof = t_s_fine[idx[0]];
+				if ((parent_info_acc[idx][0]) == 0) { 
+					// Seperate this one in Kernel 1
+					// Coarse topo dof and fine topo dof coincide
+					vec_h_acc[fine_space_dof] = vec_2h[t_s_coarse[(parent_info_acc[idx[0]][1])]];
+				}
+				else {
+					//Fine dof lies on coarse edge						
+					//Separate this one in Kernel 2
+					size_t edge_num = (parent_info_acc[idx[0]][1]);
+					//Obtain corresponding edge vertices on topology
+					size_t coarse_dof_1 = t_s_coarse[coarse_edges[edge_num][0]];
+					size_t coarse_dof_2 = t_s_coarse[coarse_edges[edge_num][1]];
+					vec_h_acc[fine_space_dof] = 0.5 * (vec_2h_acc[coarse_dof_1] + vec_2h_acc[coarse_dof_2]);
+				}				
+			});
+		});
+
+	}
+	return vec_h;
+}
+
+//Define the restriction operator
+
+std::vector<double> restriction2D_parallel(cl::sycl::queue& q, std::vector<double>vec_h , ProblemVar &obj , int target_level) {
+	int vec_h_dim = vec_h.size();
+	int vec_2h_dim = int(std::pow(((std::sqrt(vec_h_dim) - 1) / 2) + 1, 2));
+	std::vector<double> vec_2h(vec_2h_dim);
+	{
+		buffer t_to_s_fine{ obj.topo_to_space_dict[target_level + 1] };
+		buffer t_to_s_coarse{ obj.topo_to_space_dict[target_level] };
+		buffer vec_h_buf{ vec_h };
+		buffer vec_2h_buf{ vec_2h };
+
+		q.submit([&](handler& h) {
+			accessor vec_2h_acc{ vec_2h_buf , h };
+			accessor vec_h_acc{ vec_h_buf,h };
+			accessor t_s_fine{ t_to_s_fine,h };
+			accessor t_s_coarse{ t_to_s_coarse,h };
+
+			h.parallel_for(range <1>{vec_2h_dim}, [=](id<1>idx) {
+				vec_2h_acc[t_s_coarse[idx[0]]] = vec_h_acc[t_to_s_fine[idx[0]]];
+			});
+		});
 	}
 	return vec_2h;
 }
@@ -222,11 +289,14 @@ std::vector<double> vcyclemultigrid(cl::sycl::queue& q, ProblemVar &obj,
 		sub_done.wait();
 
 		//applying the restriction on the residual
+		//CASE-WISE Restriction to be used for parallel version - TODO
 		f_2h = restriction2D(residual , obj , current_level-1);
 		std::int32_t f_2h_size = f_2h.size();
 		vec_2h = std::vector<double>(f_2h_size, 0);
 		vec_2h = vcyclemultigrid(q, obj, vec_2h, f_2h , current_level-1);
 	}
+
+	//CASE-WISE Interpolation to be used for parallel version
 	std::vector<double> vec_2h_interpolation = interpolation2D(vec_2h, obj,current_level);
 	cl::sycl::event vec_h_addition = cl::sycl::event();
 	//std::vector<double> vec_h_final(vec_size, 0);
