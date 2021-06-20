@@ -291,6 +291,8 @@ std::vector<double> vcyclemultigrid(cl::sycl::queue& q, ProblemVar &obj,
 		//applying the restriction on the residual
 		//CASE-WISE Restriction to be used for parallel version - TODO
 		f_2h = restriction2D(residual , obj , current_level-1);
+
+		//Perform element wise multiplication with 4 / 8 depending upon the dimention of problem and to account for basis fns.
 		std::int32_t f_2h_size = f_2h.size();
 		vec_2h = std::vector<double>(f_2h_size, 0);
 		vec_2h = vcyclemultigrid(q, obj, vec_2h, f_2h , current_level-1);
