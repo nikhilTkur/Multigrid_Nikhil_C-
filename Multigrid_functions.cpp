@@ -1,26 +1,19 @@
-/*
-TODO : Pybind
-*/
-#include <vector>
+#include <CL/sycl.hpp>
 #include "oneapi/mkl.hpp"
 #include "mkl_types.h"
-#include <CL/sycl.hpp>
 #include <Eigen/SparseLU>
-#include <unordered_map>
-#include <cmath>
-#include <tuple>
 #include <pybind11/numpy.h>
 #include <pybind11/pybind11.h>
 #include <pybind11/stl_bind.h>
 #include <pybind11/stl.h>
 #include <pybind11/numpy.h>
-#include <pybind11/embed.h>
+#include <vector>
 
 using namespace sycl;
 using namespace oneapi::mkl::sparse;
 namespace py = pybind11;
 
-int coarsest_level = 0;
+int coarsest_level = 1;
 int finest_level = 5;
 int mu0 = 2;
 int mu1 = 1;
@@ -62,20 +55,29 @@ class ProblemVar {
 //Object of this class is specific to a problem and is initialized for each problem from Python interface.
 public:
 	Eigen::SparseMatrix<double> coarsest_level_matrix;
-	//std::unordered_map<int, csr_matrix_elements> A_sp_dict;
 	std::vector<csr_matrix_elements> A_sp_dict;
 	std::vector<csr_jacobi_elements> A_jacobi_sp_dict;
-	std::unordered_map<int, std::unordered_map<int, int>> topo_to_space_dict;
+
+	//[level -> [index = topo dof , value = space dof]]
+	std::unordered_map<int, std::vector<int>> topo_to_space_dict;
 	std::unordered_map<int, std::vector<double>> b_dict;
-	std::unordered_map<int, std::vector<std::vector<int>>>parent_info_dict; // [(0,0) , (0,1)  ,... (1 ,32)]
-	std::unordered_map<int, std::unordered_map<int, std::vector<int>>>coarse_grid_edges_dict;
+
+	//[level -> [index = fine dof , value = matching coarse dof]]
+	std::unordered_map<int, std::vector<int>>parent_info_vertex_dict;
+
+	//[level -> [index = fine dof - vec_2h_dim , value = matching coarse edge]]
+	std::unordered_map<int, std::vector<int>>parent_info_edges_dict;
+
+	//[level -> [2 * index = coarse_grid edge , value = coarse_dofs]] eg [1 -> [1,2,3,4,5,6]] -> edge 0 = 1,2 | edge 1 = 3,4, also, edges index from 0 to no_of_edges
+	std::unordered_map<int, std::vector<int>>coarse_grid_edges_dict;
 
 	//Defining a constructor that takes in py::arrays and assigns it to above member variables
 	ProblemVar(Eigen::SparseMatrix<double>& coarsest_level_matrix_py, py::array_t<csr_matrix_elements>& A_sp_list_py,
 		py::array_t<csr_jacobi_elements>& A_jacobi_sp_list_py,
 		py::array_t<py::array_t<int>>& topo_to_space_list_py,
 		py::array_t<py::array_t<double>>& b_list_py,
-		py::array_t<py::array_t<py::array_t<int>>>& parent_info_list_py,
+		py::array_t<py::array_t<int>>& parent_info_vertex_list_py,
+		py::array_t<py::array_t<int>>& parent_info_edges_list_py,
 		py::array_t<py::array_t<py::array_t<int>>>& coarse_grid_edges_list_py) {
 
 		coarsest_level_matrix = coarsest_level_matrix_py;
@@ -86,28 +88,20 @@ public:
 		//initializing topo_to_space_dict
 
 		auto r1 = topo_to_space_list_py.mutable_unchecked(); // can now index over first py::array_t
-		for (int i = 0; i < topo_to_space_list_py.size(); i++) {
-			auto r2 = r1(i).mutable_unchecked(); // can now index over internal py::array_t as well
-			for (int j = 0; j < r2.size(); j++) {
-				topo_to_space_dict[i][j] = r2(j);
+		auto r2 = b_list_py.mutable_unchecked();
+		auto r3 = parent_info_vertex_list_py.mutable_unchecked();
+		auto r4 = parent_info_edges_list_py.mutable_unchecked();
+		auto r5 = coarse_grid_edges_list_py.mutable_unchecked();
+		for (int i = coarsest_level; i <= finest_level; i++) {
+			//Copy the topo_list for a level
+			topo_to_space_dict[i] = std::vector<int>(r1(i).data() , r1(i).data()+r1(i).size());
+			b_dict[i] = std::vector<double>(r2(i).data(), r2(i).data() + r2(i).size());
+			if (i != coarsest_level) {
+				parent_info_vertex_dict[i] = std::vector<int>(r3(i).data(), r3(i).data() + r3(i).size());
+				parent_info_edges_dict[i] = std::vector<int>(r4(i).data(), r4(i).data() + r4(i).size());
 			}
-		}
-		auto r3 = b_list_py.mutable_unchecked();
-		for (int i = 0; i < b_list_py.size(); i++) {
-			b_dict[i] = std::vector<double>(r3.data(), r3.data() + r3.size());
-		}
-		auto r4 = parent_info_list_py.mutable_unchecked();
-		for (int i = 0; i < parent_info_list_py.size(); i++) {
-			auto r5 = r4(i).mutable_unchecked();
-			for (int j = 0; j < r5.size(); j++) {
-				parent_info_dict[i][j] = std::vector<int>(r5(j).data(), r5(j).data() + r5(j).size());
-			}
-		}
-		auto r6 = coarse_grid_edges_list_py.mutable_unchecked();
-		for (int i = 0; i < coarse_grid_edges_list_py.size(); i++) {
-			auto r7 = r6(i).mutable_unchecked();
-			for (int j = 0; j < r7.size(); j++) {
-				coarse_grid_edges_dict[i][j] = std::vector<int>(r7(j).data(), r7(j).data() + r7(j).size());
+			if (i != finest_level) {
+				coarse_grid_edges_dict[i] = std::vector<int>(r5(i).data(), r5(i).data() + r5(i).size());
 			}
 		}
 	}
@@ -167,20 +161,21 @@ std::vector<double> interpolation2D(std::vector<double>vec_2h, ProblemVar &obj ,
 	int vec_2h_dim = vec_2h.size();
 	int vec_h_dim = int(std::pow(2 * (std::sqrt(vec_2h_dim) - 1) + 1, 2));
 	std::vector<double> vec_h(vec_h_dim);
-	for (int i = 0; i < vec_h_dim; i++) {
+	for (int i = 0; i < vec_2h_dim; i++) {
 		int fine_space_dof = obj.topo_to_space_dict[target_level][i];
-		if ((obj.parent_info_dict[target_level][i][0]) == 0) {
-			// Coarse topo dof and fine topo dof coincide
-			vec_h[fine_space_dof] = vec_2h[obj.topo_to_space_dict[target_level-1][(obj.parent_info_dict[target_level][i][1])]];
-		}
-		else {
-			//Fine dof lies on coarse edge
-			int edge_num = (obj.parent_info_dict[target_level][i][1]);
-			//Obtain corresponding edge vertices on topology
-			int coarse_dof_1 = obj.topo_to_space_dict[target_level - 1][obj.coarse_grid_edges_dict[target_level-1][edge_num][0]];
-			int coarse_dof_2 = obj.topo_to_space_dict[target_level - 1][obj.coarse_grid_edges_dict[target_level-1][edge_num][1]];
-			vec_h[fine_space_dof] = 0.5 * (vec_2h[coarse_dof_1] + vec_2h[coarse_dof_2]);
-		}
+		// Coarse topo dof and fine topo dof coincide. As per the definition of refinement, coarse topo dof coinciding with
+		// fine topo dof have the same number in topo. 
+		vec_h[fine_space_dof] = vec_2h[obj.topo_to_space_dict[target_level-1][(obj.parent_info_vertex_dict[target_level][i])]];
+	}
+	for (int i = vec_2h_dim ; i < vec_h_dim ; i++){
+		int fine_space_dof = obj.topo_to_space_dict[target_level][i];
+		//Fine dof lies on a coarse edge
+		// Parent info stores the edges in increasing order
+		int edge_num = (obj.parent_info_edges_dict[target_level][i]); 
+		//Obtain corresponding edge vertices on topology and converting it to space dof
+		int coarse_dof_1 = obj.topo_to_space_dict[target_level - 1][obj.coarse_grid_edges_dict[target_level-1][2*edge_num]];
+		int coarse_dof_2 = obj.topo_to_space_dict[target_level - 1][obj.coarse_grid_edges_dict[target_level-1][2*edge_num+1]];
+		vec_h[fine_space_dof] = 0.5 * (vec_2h[coarse_dof_1] + vec_2h[coarse_dof_2]);
 	}
 	return vec_h;
 }
@@ -189,7 +184,6 @@ std::vector<double> restriction2D(std::vector<double>vec_h, ProblemVar& obj, int
 	int vec_h_dim = vec_h.size();
 	int vec_2h_dim = int(std::pow(((std::sqrt(vec_h_dim) - 1) / 2) + 1, 2));
 	std::vector<double> vec_2h(vec_2h_dim);
-
 	for (int i = 0; i < vec_2h_dim; i++) {
 		vec_2h[obj.topo_to_space_dict[target_level][i]] = vec_h[obj.topo_to_space_dict[target_level + 1][i]];
 	}
@@ -203,7 +197,8 @@ std::vector<double> interpolation2D_parallel(cl::sycl::queue &q , std::vector<do
 	{
 		buffer t_to_s_fine{ obj.topo_to_space_dict[target_level] };
 		buffer t_to_s_coarse{ obj.topo_to_space_dict[target_level - 1] };
-		buffer parent_info{ obj.parent_info_dict[target_level] };
+		buffer parent_info_vertex{ obj.parent_info_vertex_dict[target_level] };
+		buffer parent_info_edges{ obj.parent_info_edges_dict[target_level] };
 		buffer coarse_grid_edges{ obj.coarse_grid_edges_dict[target_level - 1] };
 		buffer vec_h_buf{ vec_h };
 		buffer vec_2h_buf{ vec_2h };
@@ -213,28 +208,24 @@ std::vector<double> interpolation2D_parallel(cl::sycl::queue &q , std::vector<do
 			accessor vec_h_acc{ vec_h_buf,h };
 			accessor t_s_fine{ t_to_s_fine,h };
 			accessor t_s_coarse{ t_to_s_coarse,h };
-			accessor parent_info_acc{ parent_info,h };
+			accessor parent_info_vertex_acc{ parent_info_vertex,h };
+			accessor parent_info_edges_acc{ parent_info_edges,h };
 			accessor coarse_edges{ coarse_grid_edges,h };
 
-			h.parallel_for(range<1>{vec_h_dim}, [=](id<1>idx) {
+			h.parallel_for(range<1>{vec_2h_dim}, [=](id<1>idx) {
 				size_t fine_space_dof = t_s_fine[idx[0]];
-				if ((parent_info_acc[idx][0]) == 0) { 
-					// Seperate this one in Kernel 1
-					// Coarse topo dof and fine topo dof coincide
-					vec_h_acc[fine_space_dof] = vec_2h[t_s_coarse[(parent_info_acc[idx[0]][1])]];
-				}
-				else {
-					//Fine dof lies on coarse edge						
-					//Separate this one in Kernel 2
-					size_t edge_num = (parent_info_acc[idx[0]][1]);
-					//Obtain corresponding edge vertices on topology
-					size_t coarse_dof_1 = t_s_coarse[coarse_edges[edge_num][0]];
-					size_t coarse_dof_2 = t_s_coarse[coarse_edges[edge_num][1]];
-					vec_h_acc[fine_space_dof] = 0.5 * (vec_2h_acc[coarse_dof_1] + vec_2h_acc[coarse_dof_2]);
-				}				
+				vec_h_acc[fine_space_dof] = vec_2h_acc[t_s_coarse[(parent_info_vertex_acc[idx[0]])]];
 			});
-		});
 
+			h.parallel_for(range<1>{vec_h_dim - vec_2h_dim}, [=](id<1>idx) {
+				size_t fine_topo_dof = idx[0] + vec_2h_dim;
+				size_t fine_space_dof = t_s_fine[fine_topo_dof];
+				size_t edge_num = parent_info_edges_acc[fine_topo_dof];
+				size_t coarse_dof_1 = t_s_coarse[coarse_edges[2*edge_num]];
+				size_t coarse_dof_2 = t_s_coarse[coarse_edges[2*edge_num+1]];
+				vec_h_acc[fine_space_dof] = 0.5 * (vec_2h_acc[coarse_dof_1] + vec_2h_acc[coarse_dof_2]);				
+			});				
+		});
 	}
 	return vec_h;
 }
@@ -277,15 +268,14 @@ std::vector<double> vcyclemultigrid(cl::sycl::queue& q, ProblemVar &obj,
 	else {
 		//Perform one smoothing operation here first
 		jacobirelaxation(q, vec_h, f_h, obj, current_level);
-
-		std::vector<double> temp_vec1(vec_size, 0);
+		//std::vector<double> temp_vec1(vec_size, 0);
 		std::vector<double> residual(vec_size, 0);
 		std::vector<double> f_2h;
 		cl::sycl::event gemv_A_vec_done = cl::sycl::event();
 		cl::sycl::event sub_done = cl::sycl::event();
 		gemv_A_vec_done = gemv(q, oneapi::mkl::transpose::nontrans, 1.0, obj.A_sp_dict[current_level].matrix_handle,
-			vec_h.data(),0.0, temp_vec1.data(), {});
-		sub_done = oneapi::mkl::vm::sub(q, vec_size, f_h.data(), temp_vec1.data(), residual.data(), { gemv_A_vec_done });
+			vec_h.data(),0.0, residual.data(), {});
+		sub_done = oneapi::mkl::vm::sub(q, vec_size, f_h.data(), residual.data(), residual.data(), { gemv_A_vec_done });
 		sub_done.wait();
 
 		//applying the restriction on the residual
