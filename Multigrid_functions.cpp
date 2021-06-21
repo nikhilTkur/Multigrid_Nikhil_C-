@@ -67,7 +67,7 @@ public:
 	std::vector<csr_jacobi_elements> A_jacobi_sp_dict;
 	std::unordered_map<int, std::unordered_map<int, int>> topo_to_space_dict;
 	std::unordered_map<int, std::vector<double>> b_dict;
-	std::unordered_map<int, std::vector<std::vector<int>>>parent_info_dict;
+	std::unordered_map<int, std::vector<std::vector<int>>>parent_info_dict; // [(0,0) , (0,1)  ,... (1 ,32)]
 	std::unordered_map<int, std::unordered_map<int, std::vector<int>>>coarse_grid_edges_dict;
 
 	//Defining a constructor that takes in py::arrays and assigns it to above member variables
