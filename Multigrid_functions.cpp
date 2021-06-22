@@ -78,7 +78,7 @@ public:
 		py::array_t<py::array_t<double>>& b_list_py,
 		py::array_t<py::array_t<int>>& parent_info_vertex_list_py,
 		py::array_t<py::array_t<int>>& parent_info_edges_list_py,
-		py::array_t<py::array_t<py::array_t<int>>>& coarse_grid_edges_list_py) {
+		py::array_t<py::array_t<int>>& coarse_grid_edges_list_py) {
 
 		coarsest_level_matrix = coarsest_level_matrix_py;
 		//assigning dicts of matrices
@@ -97,8 +97,8 @@ public:
 			topo_to_space_dict[i] = std::vector<int>(r1(i).data() , r1(i).data()+r1(i).size());
 			b_dict[i] = std::vector<double>(r2(i).data(), r2(i).data() + r2(i).size());
 			if (i != coarsest_level) {
-				parent_info_vertex_dict[i] = std::vector<int>(r3(i).data(), r3(i).data() + r3(i).size());
-				parent_info_edges_dict[i] = std::vector<int>(r4(i).data(), r4(i).data() + r4(i).size());
+				parent_info_vertex_dict[i+1] = std::vector<int>(r3(i).data(), r3(i).data() + r3(i).size());
+				parent_info_edges_dict[i+1] = std::vector<int>(r4(i).data(), r4(i).data() + r4(i).size());
 			}
 			if (i != finest_level) {
 				coarse_grid_edges_dict[i] = std::vector<int>(r5(i).data(), r5(i).data() + r5(i).size());
@@ -107,7 +107,7 @@ public:
 	}
 };
 					
-Eigen::SparseMatrix<double> coarse_matrix_assemble(py::array_t<int>& cols_, py::array_t<int>& rows_,
+Eigen::SparseMatrix<double> coarse_matrix_assemble(py::array_t<int>& rows_, py::array_t<int>& cols_,
 	py::array_t<double>& vals_, int &num_row) {
 	std::vector<int> cols = std::vector<int>(cols_.data(), cols_.data() + cols_.size());
 	std::vector<int> rows = std::vector<int>(rows_.data(), rows_.data() + rows_.size());
@@ -243,7 +243,7 @@ std::vector<double> restriction2D_parallel(cl::sycl::queue& q, std::vector<doubl
 		buffer vec_2h_buf{ vec_2h };
 
 		q.submit([&](handler& h) {
-			accessor vec_2h_acc{ vec_2h_buf , h };
+			accessor vec_2h_acc{ vec_2h_buf , h };		
 			accessor vec_h_acc{ vec_h_buf,h };
 			accessor t_s_fine{ t_to_s_fine,h };
 			accessor t_s_coarse{ t_to_s_coarse,h };
@@ -331,10 +331,14 @@ PYBIND11_MODULE(multigrid_solver, m) {
 	py::class_<csr_jacobi_elements>(m, "csr_jacobi_elements")
 		.def(py::init<csr_matrix_elements&, csr_matrix_elements&>());
 	py::class_<ProblemVar>(m, "ProblemVar")
-		.def(py::init<Eigen::SparseMatrix<double>&,py::array_t<csr_matrix_elements>&,
-			py::array_t<csr_jacobi_elements>&,py::array_t<py::array_t<int>>&,
-			py::array_t<py::array_t<double>>&,py::array_t<py::array_t<py::array_t<int>>>&,
-			py::array_t<py::array_t<py::array_t<int>>>&>());
+		.def(py::init<Eigen::SparseMatrix<double>&,
+			py::array_t<csr_matrix_elements>&,
+			py::array_t<csr_jacobi_elements>&,
+			py::array_t<py::array_t<int>>&,
+			py::array_t<py::array_t<double>>&,
+			py::array_t<py::array_t<int>>&,
+			py::array_t<py::array_t<int>>&,
+			py::array_t<py::array_t<int>>&>());
 	m.def("eigen_matrix_assemble", &coarse_matrix_assemble);
 	m.def("solve", &solve);
 
