@@ -341,5 +341,4 @@ PYBIND11_MODULE(multigrid_solver, m) {
 			py::array_t<py::array_t<int>>&>());
 	m.def("eigen_matrix_assemble", &coarse_matrix_assemble);
 	m.def("solve", &solve);
-
 }

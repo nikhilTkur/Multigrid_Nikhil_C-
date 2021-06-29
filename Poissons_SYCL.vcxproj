@@ -13,7 +13,10 @@
   <ItemGroup>
     <ClCompile Include="help.cpp" />
     <ClCompile Include="Multigrid_functions.cpp" />
-    <ClCompile Include="temp_wrapped.cpp" />
+    <ClCompile Include="Poissons_SYCL.cpp" />
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="multigrid_2d_sycl_test_problem.py" />
   </ItemGroup>
   <PropertyGroup Label="Globals">
     <VCProjectVersion>15.0</VCProjectVersion>

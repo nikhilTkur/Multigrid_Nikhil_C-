@@ -15,14 +15,19 @@
     </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="temp_wrapped.cpp">
-      <Filter>Source Files</Filter>
-    </ClCompile>
     <ClCompile Include="Multigrid_functions.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
     <ClCompile Include="help.cpp">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="Poissons_SYCL.cpp">
+      <Filter>Source Files</Filter>
+    </ClCompile>
+  </ItemGroup>
+  <ItemGroup>
+    <None Include="multigrid_2d_sycl_test_problem.py">
+      <Filter>Source Files</Filter>
+    </None>
   </ItemGroup>
 </Project>
