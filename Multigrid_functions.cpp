@@ -241,13 +241,19 @@ void vcyclemultigrid(cl::sycl::queue& q, ProblemVar &obj, int current_level) {
 	else {
 		//Perform one smoothing operation here first
 		jacobi_relaxation(q, obj, current_level);
+
+		// Calculate the residual and store it in temp_vec for current level
+		// TODO : Perform element wise multiplication with 4 / 8 depending upon the dimention of problem and to account for basis fns. 
 		oneapi::mkl::sparse::gemv(q, oneapi::mkl::transpose::nontrans, 1.0, obj.A_sp_dict[current_level].matrix,
 			obj.vecs_dict[current_level],0.0, obj.temp_dict[current_level]);
 		oneapi::mkl::vm::sub(q, obj.num_dofs_per_level[current_level], obj.b_dict[current_level], obj.temp_dict[current_level]
 			, obj.temp_dict[current_level]);
-
+		
+		// Store the restricted residual in b_dict for previous level
 		restriction2D(q,obj,current_level-1);
-		// make vecs_2h '0' so that it stores the current best approximation of the error
+
+		// make vecs_2h '0' so that it stores the current best approximation of the error-residual equation solution
+		// during the next V-cycle call
 		q.submit([&](cl::sycl::handler& h) {
 			auto vec_2h = obj.vecs_dict[current_level-1].get_access<cl::sycl::access::mode::write>(h);
 			h.parallel_for(cl::sycl::range<1>{obj.num_dofs_per_level[current_level-1]}, [=](cl::sycl::id<1>idx) {
@@ -256,12 +262,16 @@ void vcyclemultigrid(cl::sycl::queue& q, ProblemVar &obj, int current_level) {
 		});
 		q.wait();
 		
-		//Perform element wise multiplication with 4 / 8 depending upon the dimention of problem and to account for basis fns.
 		vcyclemultigrid(q, obj, current_level-1);
 	}
+	// Calculate the interpolation of the solution of error-residual equation from the previous level 
+	//from vecs_dict[level-1] to temp_vec[level]
 	interpolation2D(q,obj,current_level);
+
+	// Add the interpolated error (stored in temp_vec[current_level]) to vecs_dict[current_level]
 	oneapi::mkl::vm::add(q, obj.num_dofs_per_level[current_level], obj.vecs_dict[current_level], obj.temp_dict[current_level],
 		obj.vecs_dict[current_level]);
+
 	// Perform jacobi relaxation here
 	jacobi_relaxation(q, obj, current_level);
 }
@@ -292,8 +302,10 @@ void fullmultigrid(cl::sycl::queue& q, ProblemVar &obj, int current_level) {
 	else {
 		fullmultigrid(q, obj, current_level-1);
 	}
-	interpolation2D(q,obj , current_level);
-	//Transfer temp_vec to vecs so that vecs acts as a good initial guess based on previous grid soln.
+
+	// interpolate the coarse grid solution to current level and use it as a initial guess for V-cycle (and Jacobi relaxation)
+	interpolation2D(q,obj , current_level); // Stores the solution in temp_vec, need to transfer the solution from temp_vec to vecs.
+
 	q.submit([&](cl::sycl::handler& h) {
 		auto vec_h = obj.vecs_dict[current_level].get_access<cl::sycl::access::mode::write>(h);
 		auto temp_vec = obj.temp_dict[current_level].get_access < cl::sycl::access::mode::read>(h);
@@ -302,13 +314,13 @@ void fullmultigrid(cl::sycl::queue& q, ProblemVar &obj, int current_level) {
 		});		
 	});
 	q.wait();
-	if (current_level != finest_level) {
+	if (current_level != finest_level) { // Call lesser V-cycles on non-fine levels
 
 		for (int i = 0; i <= mu0_1; i++) {
 			vcyclemultigrid(q, obj, current_level);
 		}
 	}
-	else {
+	else { // call more V-cycles on finer level
 		for (int i = 0; i <= mu0; i++) {
 			vcyclemultigrid(q, obj, current_level);
 		}
