@@ -2,343 +2,322 @@
 #include "oneapi/mkl.hpp"
 #include "mkl_types.h"
 #include <Eigen/SparseLU>
-#include <pybind11/numpy.h>
-#include <pybind11/pybind11.h>
-#include <pybind11/stl_bind.h>
-#include <pybind11/stl.h>
-#include <pybind11/numpy.h>
 #include <vector>
-
-using namespace sycl;
-using namespace oneapi::mkl::sparse;
-namespace py = pybind11;
+#include <unordered_map>
 
 int coarsest_level = 1;
 int finest_level = 5;
-int mu0 = 2;
-int mu1 = 1;
-int mu2 = 1;
-float omega = 4 / 5;
-
-struct csr_jacobi_elements
-{
-	csr_matrix_elements D_inv;
-	csr_matrix_elements R_omega;
-	csr_jacobi_elements() {}
-	csr_jacobi_elements(csr_matrix_elements&D_inv_ , csr_matrix_elements &R_omega_){
-		D_inv = D_inv_;
-		R_omega = R_omega_;
-	}
-};
+int mu0 = 5; // V-cycles per  finest_level
+int mu0_1 = 1; // V-cycles per other levels
+int mu1 = 3; // pre and post smooths
+double omega = 4 / 5; // Jacobi smoother parameter
 
 struct csr_matrix_elements
 {
-	std::vector<int> row;
-	std::vector<int>col;
-	std::vector<double> values;
-	matrix_handle_t matrix_handle;
-	int size;
-	csr_matrix_elements() {}
-	csr_matrix_elements(py::array_t<int>& row_, py::array_t<int>& col_, py::array_t<double>& vals_, int& size_) {
-		row = std::vector<int> (row_.data(), row_.data() + row_.size());
-		col = std::vector<int> (col_.data(), col_.data() + col_.size());
-		values = std::vector<double> (vals_.data(), vals_.data() + vals_.size());
+	cl::sycl::buffer<std::int32_t, 1> row;
+	cl::sycl::buffer<std::int32_t, 1> col;
+	cl::sycl::buffer<double, 1> values;
+	oneapi::mkl::sparse::matrix_handle_t matrix;
+	std::int32_t size;
+	csr_matrix_elements(std::int32_t *row_ptr , std::int32_t *col_ptr , double *val_ptr , std::int32_t nnz , std::int32_t n_dofs) {
+		row = cl::sycl::buffer<std::int32_t, 1>{ row_ptr , cl::sycl::range<1>{n_dofs + 1} };
+		col = cl::sycl::buffer<std::int32_t, 1>{ col_ptr , cl::sycl::range<1>{nnz} };
+		values = cl::sycl::buffer<double, 1>{ val_ptr, cl::sycl::range<1>{nnz} };
 		// Create a matrix entity
-		size = size_;
-		init_matrix_handle(&matrix_handle);
-		set_csr_data(matrix_handle, size, size, oneapi::mkl::index_base::zero, row.data(),
-			col.data(), values.data());
+		size = n_dofs;
+		oneapi::mkl::sparse::init_matrix_handle(&matrix);
+		oneapi::mkl::sparse::set_csr_data(matrix, size, size, oneapi::mkl::index_base::zero, row,col, values);
 	}
 };
 
 class ProblemVar {
-//Object of this class is specific to a problem and is initialized for each problem from Python interface.
 public:
 	Eigen::SparseMatrix<double> coarsest_level_matrix;
 	std::vector<csr_matrix_elements> A_sp_dict;
-	std::vector<csr_jacobi_elements> A_jacobi_sp_dict;
 
 	//[level -> [index = topo dof , value = space dof]]
-	std::unordered_map<int, std::vector<int>> topo_to_space_dict;
-	std::unordered_map<int, std::vector<double>> b_dict;
+	std::unordered_map<int, cl::sycl::buffer<std::int32_t , 1>> topo_to_space_dict;
 
-	//[level -> [index = fine dof , value = matching coarse dof]]
-	std::unordered_map<int, std::vector<int>>parent_info_vertex_dict;
+	// [level -> RHS for that level as a buffer object]
+	std::unordered_map<int, cl::sycl::buffer<double, 1>> b_dict;
 
-	//[level -> [index = fine dof - vec_2h_dim , value = matching coarse edge]]
-	std::unordered_map<int, std::vector<int>>parent_info_edges_dict;
+	std::unordered_map<int, std::int32_t> num_dofs_per_level;
+
+	//[level -> [index = fine dof , value = matching coarse dof from parent grid]]
+	std::unordered_map<int, cl::sycl::buffer<std::int32_t, 1>>parent_info_vertex_dict;
+
+	//[level -> [index = fine dof - vec_2h_dim , value = matching coarse edge from parent grid]]
+	std::unordered_map<int, cl::sycl::buffer<std::int32_t, 1>>parent_info_edges_dict;
 
 	//[level -> [2 * index = coarse_grid edge , value = coarse_dofs]] eg [1 -> [1,2,3,4,5,6]] -> edge 0 = 1,2 | edge 1 = 3,4, also, edges index from 0 to no_of_edges
-	std::unordered_map<int, std::vector<int>>coarse_grid_edges_dict;
+	std::unordered_map<int, cl::sycl::buffer<std::int32_t, 1>>coarse_grid_edges_dict;
 
-	//Defining a constructor that takes in py::arrays and assigns it to above member variables
-	ProblemVar(Eigen::SparseMatrix<double>& coarsest_level_matrix_py, py::array_t<csr_matrix_elements>& A_sp_list_py,
-		py::array_t<csr_jacobi_elements>& A_jacobi_sp_list_py,
-		py::array_t<py::array_t<int>>& topo_to_space_list_py,
-		py::array_t<py::array_t<double>>& b_list_py,
-		py::array_t<py::array_t<int>>& parent_info_vertex_list_py,
-		py::array_t<py::array_t<int>>& parent_info_edges_list_py,
-		py::array_t<py::array_t<int>>& coarse_grid_edges_list_py) {
-
-		coarsest_level_matrix = coarsest_level_matrix_py;
-		//assigning dicts of matrices
-		A_sp_dict = std::vector<csr_matrix_elements>(A_sp_list_py.data(), A_sp_list_py.data() + A_sp_list_py.size());
-		A_jacobi_sp_dict = std::vector<csr_jacobi_elements>(A_jacobi_sp_list_py.data() , A_jacobi_sp_list_py.data() +
-			A_jacobi_sp_list_py.size());
-		//initializing topo_to_space_dict
-
-		auto r1 = topo_to_space_list_py.mutable_unchecked(); // can now index over first py::array_t
-		auto r2 = b_list_py.mutable_unchecked();
-		auto r3 = parent_info_vertex_list_py.mutable_unchecked();
-		auto r4 = parent_info_edges_list_py.mutable_unchecked();
-		auto r5 = coarse_grid_edges_list_py.mutable_unchecked();
-		for (int i = coarsest_level; i <= finest_level; i++) {
-			//Copy the topo_list for a level
-			topo_to_space_dict[i] = std::vector<int>(r1(i).data() , r1(i).data()+r1(i).size());
-			b_dict[i] = std::vector<double>(r2(i).data(), r2(i).data() + r2(i).size());
-			if (i != coarsest_level) {
-				parent_info_vertex_dict[i+1] = std::vector<int>(r3(i).data(), r3(i).data() + r3(i).size());
-				parent_info_edges_dict[i+1] = std::vector<int>(r4(i).data(), r4(i).data() + r4(i).size());
-			}
-			if (i != finest_level) {
-				coarse_grid_edges_dict[i] = std::vector<int>(r5(i).data(), r5(i).data() + r5(i).size());
-			}
-		}
-	}
+	std::unordered_map<int, cl::sycl::buffer<double, 1>> vecs_dict;
+	std::unordered_map<int, cl::sycl::buffer<double, 1>> temp_dict; // TO STORE RESIDUAL AND INTERPOLANT AT EACH LEVEL
 };
-					
-Eigen::SparseMatrix<double> coarse_matrix_assemble(py::array_t<int>& rows_, py::array_t<int>& cols_,
-	py::array_t<double>& vals_, int &num_row) {
-	std::vector<int> cols = std::vector<int>(cols_.data(), cols_.data() + cols_.size());
-	std::vector<int> rows = std::vector<int>(rows_.data(), rows_.data() + rows_.size());
-	std::vector<double> vals = std::vector<double>(vals_.data(), vals_.data() + vals_.size());
-	Eigen::SparseMatrix<double> sparse_mat(num_row, num_row);
-	sparse_mat.reserve(Eigen::VectorXi::Constant(num_row, 4));
-	for (int i = 0; i < rows.size()-1; i++) {
+void coarse_matrix_assemble(cl::sycl::queue &q,ProblemVar &obj) {
 
-		for (int j = rows[i]; j <= rows[i+1]-1; j++) {
-			sparse_mat.insert(i, cols[j]) = vals[j];
+	// Assembles the coarsest level matrix as an Eigen matrix. Coarse domain to be solved sequentially
+
+	q.submit([&](cl::sycl::handler &h) {
+		//Accessors for coarsest level CSR data.
+		auto row = obj.A_sp_dict[coarsest_level].row.get_access<cl::sycl::access::mode::read>(h);
+		auto col = obj.A_sp_dict[coarsest_level].col.get_access<cl::sycl::access::mode::read>(h);
+		auto val = obj.A_sp_dict[coarsest_level].values.get_access<cl::sycl::access::mode::read>(h);
+
+		obj.coarsest_level_matrix = Eigen::SparseMatrix<double>(obj.num_dofs_per_level[coarsest_level], 
+			obj.num_dofs_per_level[coarsest_level]);
+		obj.coarsest_level_matrix.reserve(Eigen::VectorXd::Constant(obj.num_dofs_per_level[coarsest_level], 4));
+
+		for (int i = 0; i < obj.num_dofs_per_level[coarsest_level]; i++) {
+			for (int j = row[i]; j <= row[i+1]-1; j++) {
+				obj.coarsest_level_matrix.insert(i, col[j]) = val[j];
+			}
 		}
-	}
-	return sparse_mat;
+	});
+}
+void direct_solver(cl::sycl::queue &q , ProblemVar &obj) {
+	// direct solver for the coarsest level grid.
+	q.submit([&](cl::sycl::handler &h) {
+		auto coarse_vec = obj.vecs_dict[coarsest_level].get_access<cl::sycl::access::mode::write>(h); // Stores the solution vector
+		auto coarse_b = obj.b_dict[coarsest_level].get_access<cl::sycl::access::mode::read>(h); // stores the RHS of Ax = b
+		Eigen::VectorXd b_eigen = Eigen::VectorXd::Map(coarse_b.get_pointer());
+		Eigen::VectorXd vec_eigen = Eigen::VectorXd::Map(coarse_vec.get_pointer());
+		Eigen::SparseLU<Eigen::SparseMatrix<double>> solver;
+		solver.compute(obj.coarsest_level_matrix);
+		vec_eigen = solver.solve(b_eigen);
+	});
 }
 
-std::vector<double> direct_solver(Eigen::SparseMatrix<double>& sparse_matrix, std::vector<double>& b) {
-	Eigen::VectorXd b_eg = Eigen::VectorXd::Map(b.data(), b.size());
-	Eigen::SparseLU<Eigen::SparseMatrix<double>> solver;
-	solver.compute(sparse_matrix);
-	Eigen::VectorXd solution = solver.solve(b_eg);
-	std::vector<double> sol;
-	sol.resize(solution.size());
-	Eigen::VectorXd::Map(&sol[0], solution.size()) = solution;
-	return sol;
-}
+void jacobi_relaxation(cl::sycl::queue &q,ProblemVar& obj, int current_level) {
+	// Iterates on the current level on obj.vecs_dict[current_level] buffer. Stores intermediate value in temp_dict[current_level]
+	// and then adds the result back to the obj.vecs_dict[current_level].
 
+	for (int iterations = 1; iterations <= mu1; iterations++) {
+		// TODO	  =>		v(k+1) = [(1 - omega) x I + omega x D^-1 x(-L-U)] x v(k) + omega x D^-1 x f
+		//					
+		// step 1 =>		v* = (-L-U) x v
+		// step 2 =>		v* = D^-1 x (v* + f)
+		// step 3 =>		v = (1-omega) x v + omega x v*
 
-void jacobirelaxation(cl::sycl::queue &q, std::vector<double>& vec, std::vector<double> &b, ProblemVar &obj 
-	, int current_level) {
-	int size = vec.size();
-	//std::vector<double> ans(size, 0.0);
-	std::vector<double> prod_1(size, 0.0);
-	std::vector<double> prod_2(size, 0.0);
+		q.submit([&](cl::sycl::handler& h) {
+			// Accessor for current_level matrix CSR values
+			auto row = obj.A_sp_dict[current_level].row.get_access<cl::sycl::access::mode::read>(h);
+			auto col = obj.A_sp_dict[current_level].col.get_access<cl::sycl::access::mode::read>(h);
+			auto val = obj.A_sp_dict[current_level].values.get_access<cl::sycl::access::mode::read>(h);
 
-	cl::sycl::event R_V_mul_done = cl::sycl::event();
-	cl::sycl::event D_inv_F_done = cl::sycl::event(); // Replace it by a vector to vector multiplication
-	cl::sycl::event add_done = cl::sycl::event();
+			// Accessor for current_level vector
+			auto vec = obj.vecs_dict[current_level].get_access<cl::sycl::access::mode::read>(h);
+			auto vec_star = obj.temp_dict[current_level].get_access<cl::sycl::access::mode::read_write>(h);
+			auto f = obj.b_dict[current_level].get_access<cl::sycl::access::mode::read>(h);
 
-	for (int i = 0; i < 10; i++) {
-		R_V_mul_done = gemv(q, oneapi::mkl::transpose::nontrans, 1.0, obj.A_jacobi_sp_dict[current_level].R_omega.matrix_handle,
-			vec.data(), 0.0, prod_1.data());
-		D_inv_F_done = gemv(q, oneapi::mkl::transpose::nontrans, omega, obj.A_jacobi_sp_dict[current_level].D_inv.matrix_handle,
-			b.data(), 0.0, prod_2.data());
-		add_done = oneapi::mkl::vm::add(q, size, prod_1.data(), prod_2.data(), vec.data(),
-			{ R_V_mul_done , D_inv_F_done });
-		add_done.wait();
-	}
-}
-
-std::vector<double> interpolation2D(std::vector<double>vec_2h, ProblemVar &obj , int target_level) {
-	int vec_2h_dim = vec_2h.size();
-	int vec_h_dim = int(std::pow(2 * (std::sqrt(vec_2h_dim) - 1) + 1, 2));
-	std::vector<double> vec_h(vec_h_dim);
-	for (int i = 0; i < vec_2h_dim; i++) {
-		int fine_space_dof = obj.topo_to_space_dict[target_level][i];
-		// Coarse topo dof and fine topo dof coincide. As per the definition of refinement, coarse topo dof coinciding with
-		// fine topo dof have the same number in topo. 
-		vec_h[fine_space_dof] = vec_2h[obj.topo_to_space_dict[target_level-1][(obj.parent_info_vertex_dict[target_level][i])]];
-	}
-	for (int i = vec_2h_dim ; i < vec_h_dim ; i++){
-		int fine_space_dof = obj.topo_to_space_dict[target_level][i];
-		//Fine dof lies on a coarse edge
-		// Parent info stores the edges in increasing order
-		int edge_num = (obj.parent_info_edges_dict[target_level][i]); 
-		//Obtain corresponding edge vertices on topology and converting it to space dof
-		int coarse_dof_1 = obj.topo_to_space_dict[target_level - 1][obj.coarse_grid_edges_dict[target_level-1][2*edge_num]];
-		int coarse_dof_2 = obj.topo_to_space_dict[target_level - 1][obj.coarse_grid_edges_dict[target_level-1][2*edge_num+1]];
-		vec_h[fine_space_dof] = 0.5 * (vec_2h[coarse_dof_1] + vec_2h[coarse_dof_2]);
-	}
-	return vec_h;
-}
-
-std::vector<double> restriction2D(std::vector<double>vec_h, ProblemVar& obj, int target_level) {
-	int vec_h_dim = vec_h.size();
-	int vec_2h_dim = int(std::pow(((std::sqrt(vec_h_dim) - 1) / 2) + 1, 2));
-	std::vector<double> vec_2h(vec_2h_dim);
-	for (int i = 0; i < vec_2h_dim; i++) {
-		vec_2h[obj.topo_to_space_dict[target_level][i]] = vec_h[obj.topo_to_space_dict[target_level + 1][i]];
-	}
-	return vec_2h;
-}
-
-std::vector<double> interpolation2D_parallel(cl::sycl::queue &q , std::vector<double>vec_2h, ProblemVar& obj, int target_level) {
-	size_t vec_2h_dim = vec_2h.size();
-	size_t vec_h_dim = size_t(std::pow(2 * (std::sqrt(vec_2h_dim) - 1) + 1, 2));
-	std::vector<double> vec_h(vec_h_dim);
-	{
-		buffer t_to_s_fine{ obj.topo_to_space_dict[target_level] };
-		buffer t_to_s_coarse{ obj.topo_to_space_dict[target_level - 1] };
-		buffer parent_info_vertex{ obj.parent_info_vertex_dict[target_level] };
-		buffer parent_info_edges{ obj.parent_info_edges_dict[target_level] };
-		buffer coarse_grid_edges{ obj.coarse_grid_edges_dict[target_level - 1] };
-		buffer vec_h_buf{ vec_h };
-		buffer vec_2h_buf{ vec_2h };
-
-		q.submit([&](handler& h) {
-			accessor vec_2h_acc{ vec_2h_buf , h };
-			accessor vec_h_acc{ vec_h_buf,h };
-			accessor t_s_fine{ t_to_s_fine,h };
-			accessor t_s_coarse{ t_to_s_coarse,h };
-			accessor parent_info_vertex_acc{ parent_info_vertex,h };
-			accessor parent_info_edges_acc{ parent_info_edges,h };
-			accessor coarse_edges{ coarse_grid_edges,h };
-
-			h.parallel_for(range<1>{vec_2h_dim}, [=](id<1>idx) {
-				size_t fine_space_dof = t_s_fine[idx[0]];
-				vec_h_acc[fine_space_dof] = vec_2h_acc[t_s_coarse[(parent_info_vertex_acc[idx[0]])]];
+			h.parallel_for(cl::sycl::range<1>{obj.num_dofs_per_level[current_level]}, [=](cl::sycl::id<1>idx) {
+				// parallely launch all the dofs on device.
+				//current dof = idx[0]
+				double diag_multiplier = 0;
+				for (std::int32_t i = row[idx[0]]; i < row[idx[0] + 1]; i++) {
+					if (col[i] != idx[0]) { // means that its a non-diagonal entry in matrix => step 1 
+						vec_star[idx[0]] += -1.0 * val[i] * vec[col[i]];
+					}
+					else {
+						diag_multiplier = 1.0 / val[i];
+					}
+				}
+				vec_star[idx[0]] = diag_multiplier * (vec_star[idx[0]] + f[idx[0]]);	// step 2
 			});
 
-			h.parallel_for(range<1>{vec_h_dim - vec_2h_dim}, [=](id<1>idx) {
-				size_t fine_topo_dof = idx[0] + vec_2h_dim;
-				size_t fine_space_dof = t_s_fine[fine_topo_dof];
-				size_t edge_num = parent_info_edges_acc[fine_topo_dof];
-				size_t coarse_dof_1 = t_s_coarse[coarse_edges[2*edge_num]];
-				size_t coarse_dof_2 = t_s_coarse[coarse_edges[2*edge_num+1]];
-				vec_h_acc[fine_space_dof] = 0.5 * (vec_2h_acc[coarse_dof_1] + vec_2h_acc[coarse_dof_2]);				
-			});				
 		});
-	}
-	return vec_h;
-}
+		q.wait();
+		q.submit([&](cl::sycl::handler& h) {
+			// Accessor for current_level vector
+			auto vec = obj.vecs_dict[current_level].get_access<cl::sycl::access::mode::read_write>(h);
+			auto vec_star = obj.temp_dict[current_level].get_access<cl::sycl::access::mode::read>(h);
 
-//Define the restriction operator
+			h.parallel_for(cl::sycl::range<1>{obj.num_dofs_per_level[current_level]}, [=](cl::sycl::id<1>idx) {
 
-std::vector<double> restriction2D_parallel(cl::sycl::queue& q, std::vector<double>vec_h , ProblemVar &obj , int target_level) {
-	int vec_h_dim = vec_h.size();
-	int vec_2h_dim = int(std::pow(((std::sqrt(vec_h_dim) - 1) / 2) + 1, 2));
-	std::vector<double> vec_2h(vec_2h_dim);
-	{
-		buffer t_to_s_fine{ obj.topo_to_space_dict[target_level + 1] };
-		buffer t_to_s_coarse{ obj.topo_to_space_dict[target_level] };
-		buffer vec_h_buf{ vec_h };
-		buffer vec_2h_buf{ vec_2h };
-
-		q.submit([&](handler& h) {
-			accessor vec_2h_acc{ vec_2h_buf , h };		
-			accessor vec_h_acc{ vec_h_buf,h };
-			accessor t_s_fine{ t_to_s_fine,h };
-			accessor t_s_coarse{ t_to_s_coarse,h };
-
-			h.parallel_for(range <1>{vec_2h_dim}, [=](id<1>idx) {
-				vec_2h_acc[t_s_coarse[idx[0]]] = vec_h_acc[t_to_s_fine[idx[0]]];
+				vec[idx[0]] = (1.0 - omega) * vec[idx[0]] + omega * vec_star[idx[0]]; //	step 3
 			});
 		});
+		q.wait();
 	}
-	return vec_2h;
 }
 
-std::vector<double> vcyclemultigrid(cl::sycl::queue& q, ProblemVar &obj, 
-	std::vector<double>& vec_h, std::vector<double>& f_h , int current_level) {
+std::vector<double> interpolation2D(cl::sycl::queue &q, ProblemVar &obj , int target_level) {
+	// interpolates the values from vecs_dict[target_level -1] -> temp_dict[target_level]
 
-	std::int32_t vec_size = vec_h.size();
-	std::vector<double> vec_2h;
-	if (current_level == coarsest_level) {		//USE DIRECT SOLVER HERE
-		vec_h = direct_solver(obj.coarsest_level_matrix, f_h);
-		return vec_h;
+	q.submit([&](cl::sycl::handler &h) {
+		// Accessor for temp_dict[target_level] ->WIRTE-ONLY
+		auto vec_h = obj.temp_dict[target_level].get_access<cl::sycl::access::mode::write>(h);
+
+		// Accessor for vecs_dict[target_level -1] ->READ-ONLY
+		auto vec_2h = obj.vecs_dict[target_level - 1].get_access<cl::sycl::access::mode::read>(h);
+
+		//Accessor for topo_to_space_dict_coarse ->READ-ONLY
+		auto t_2_s_coarse = obj.topo_to_space_dict[target_level - 1].get_access<cl::sycl::access::mode::read>(h);
+
+		//Accessor for topo_to_space_dict_fine ->READ-ONLY
+		auto t_2_s_fine = obj.topo_to_space_dict[target_level].get_access<cl::sycl::access::mode::read>(h);
+
+		//Accessor for parent_info_dicts for current level ->READ-ONLY
+		auto parent_info_vertices = obj.parent_info_vertex_dict[target_level].get_access<cl::sycl::access::mode::read>(h);
+		auto parent_info_edges = obj.parent_info_edges_dict[target_level].get_access<cl::sycl::access::mode::read>(h);
+
+		//Accessor for coarse_edges ->READ-ONLY
+		auto coarse_level_edges = obj.coarse_grid_edges_dict[target_level - 1].get_access<cl::sycl::access::mode::read>(h);
+
+		if (obj.num_dofs_per_level[target_level] > 1000000) { //Use parallel version of interpolation
+
+			//directly inject the value from coarse grid dof to fine grid dof as they coincide
+			h.parallel_for(cl::sycl::range<1>{obj.num_dofs_per_level[target_level-1]}, [=](cl::sycl::id<1>idx) {				
+				//find the fine space dof from topology map
+				std::int32_t fine_space_dof = t_2_s_fine[idx[0]];
+				vec_h[fine_space_dof] = vec_2h[t_2_s_coarse[(parent_info_vertices[idx[0]])]];
+			});
+			// interpolate the value for fine dofs on the edges of coarse dofs
+			h.parallel_for(cl::sycl::range<1>{obj.num_dofs_per_level[target_level] - obj.num_dofs_per_level[target_level-1]},
+			[=](cl::sycl::id<1>idx) {
+				std::int32_t fine_topo_dof = idx[0] + obj.num_dofs_per_level.at(target_level-1);
+				std::int32_t fine_space_dof = t_2_s_fine[fine_topo_dof];
+				std::int32_t edge_num = parent_info_edges[fine_topo_dof];
+				std::int32_t coarse_dof_1 = t_2_s_coarse[coarse_level_edges[2 * edge_num]];
+				std::int32_t coarse_dof_2 = t_2_s_coarse[coarse_level_edges[2 * edge_num + 1]];
+				vec_h[fine_space_dof] = 0.5 * (vec_2h[coarse_dof_1] + vec_2h[coarse_dof_2]);
+			});
+		}
+		else { // use the serial version of the interpolation
+
+			for (std::int32_t i = 0; i < obj.num_dofs_per_level[target_level - 1]; i++) {
+				std::int32_t fine_space_dof = t_2_s_fine[i];
+				vec_h[fine_space_dof] = vec_2h[t_2_s_coarse[(parent_info_vertices[i])]];
+			}
+			for (std::int32_t i = obj.num_dofs_per_level[target_level-1]; i < obj.num_dofs_per_level[target_level]; i++) {
+				std::int32_t fine_space_dof = t_2_s_fine[i];
+				std::int32_t edge_num = parent_info_edges[i];
+				//Obtain corresponding edge vertices on topology and converting it to space dof
+				std::int32_t coarse_dof_1 = t_2_s_coarse[coarse_level_edges[2 * edge_num]];
+				std::int32_t coarse_dof_2 = t_2_s_coarse[coarse_level_edges[2 * edge_num + 1]];
+				vec_h[fine_space_dof] = 0.5 * (vec_2h[coarse_dof_1] + vec_2h[coarse_dof_2]);
+			}
+		}		
+	});
+	q.wait();	
+}
+
+void restriction2D(cl::sycl::queue &q, ProblemVar &obj, int target_level) {
+
+	q.submit([&](cl::sycl::handler& h) {
+		// Accessor for temp_dict[target_level + 1] ->READ-ONLY
+		auto vec_h = obj.temp_dict[target_level+1].get_access<cl::sycl::access::mode::read>(h);
+
+		// Accessor for b_dict[target_level] ->WRITE-ONLY
+		auto vec_2h = obj.b_dict[target_level].get_access<cl::sycl::access::mode::write>(h);
+
+		//Accessor for topo_to_space_dict_coarse ->READ-ONLY
+		auto t_2_s_coarse = obj.topo_to_space_dict[target_level].get_access<cl::sycl::access::mode::read>(h);
+
+		//Accessor for topo_to_space_dict_fine ->READ-ONLY
+		auto t_2_s_fine = obj.topo_to_space_dict[target_level+1].get_access<cl::sycl::access::mode::read>(h);
+
+		if(obj.num_dofs_per_level[target_level] > 1000000) { // use parallel restriction
+			h.parallel_for(cl::sycl::range <1>{obj.num_dofs_per_level[target_level]}, [=](cl::sycl::id<1>idx) {
+				vec_2h[t_2_s_coarse[idx[0]]] = vec_h[t_2_s_fine[idx[0]]];
+			});
+		}
+		else { // use serial restriction
+			for (std::int32_t i = 0; i < obj.num_dofs_per_level[target_level]; i++) {
+				vec_2h[t_2_s_coarse[i]] = vec_h[t_2_s_fine[i]];
+			}
+		}
+	});
+	q.wait();
+}
+
+void vcyclemultigrid(cl::sycl::queue& q, ProblemVar &obj, int current_level) {
+
+	if (current_level == coarsest_level) {		
+		//Use direct solver here
+		direct_solver(q , obj);
 	}
 	else {
 		//Perform one smoothing operation here first
-		jacobirelaxation(q, vec_h, f_h, obj, current_level);
-		//std::vector<double> temp_vec1(vec_size, 0);
-		std::vector<double> residual(vec_size, 0);
-		std::vector<double> f_2h;
-		cl::sycl::event gemv_A_vec_done = cl::sycl::event();
-		cl::sycl::event sub_done = cl::sycl::event();
-		gemv_A_vec_done = gemv(q, oneapi::mkl::transpose::nontrans, 1.0, obj.A_sp_dict[current_level].matrix_handle,
-			vec_h.data(),0.0, residual.data(), {});
-		sub_done = oneapi::mkl::vm::sub(q, vec_size, f_h.data(), residual.data(), residual.data(), { gemv_A_vec_done });
-		sub_done.wait();
+		jacobi_relaxation(q, obj, current_level);
+		oneapi::mkl::sparse::gemv(q, oneapi::mkl::transpose::nontrans, 1.0, obj.A_sp_dict[current_level].matrix,
+			obj.vecs_dict[current_level],0.0, obj.temp_dict[current_level]);
+		oneapi::mkl::vm::sub(q, obj.num_dofs_per_level[current_level], obj.b_dict[current_level], obj.temp_dict[current_level]
+			, obj.temp_dict[current_level]);
 
-		//applying the restriction on the residual
-		//CASE-WISE Restriction to be used for parallel version - TODO
-		f_2h = restriction2D(residual , obj , current_level-1);
-
+		restriction2D(q,obj,current_level-1);
+		// make vecs_2h '0' so that it stores the current best approximation of the error
+		q.submit([&](cl::sycl::handler& h) {
+			auto vec_2h = obj.vecs_dict[current_level-1].get_access<cl::sycl::access::mode::write>(h);
+			h.parallel_for(cl::sycl::range<1>{obj.num_dofs_per_level[current_level-1]}, [=](cl::sycl::id<1>idx) {
+				vec_2h[idx[0]] = 0.0;
+			});
+		});
+		q.wait();
+		
 		//Perform element wise multiplication with 4 / 8 depending upon the dimention of problem and to account for basis fns.
-		std::int32_t f_2h_size = f_2h.size();
-		vec_2h = std::vector<double>(f_2h_size, 0);
-		vec_2h = vcyclemultigrid(q, obj, vec_2h, f_2h , current_level-1);
+		vcyclemultigrid(q, obj, current_level-1);
 	}
-
-	//CASE-WISE Interpolation to be used for parallel version
-	std::vector<double> vec_2h_interpolation = interpolation2D(vec_2h, obj,current_level);
-	cl::sycl::event vec_h_addition = cl::sycl::event();
-	//std::vector<double> vec_h_final(vec_size, 0);
-	vec_h_addition = oneapi::mkl::vm::add(q, vec_size, vec_h.data(), vec_2h_interpolation.data(), 
-		vec_h.data(), {});
-	vec_h_addition.wait();
-
+	interpolation2D(q,obj,current_level);
+	oneapi::mkl::vm::add(q, obj.num_dofs_per_level[current_level], obj.vecs_dict[current_level], obj.temp_dict[current_level],
+		obj.vecs_dict[current_level]);
 	// Perform jacobi relaxation here
-	jacobirelaxation(q, vec_h, f_h, obj, current_level);
-	return vec_h;
+	jacobi_relaxation(q, obj, current_level);
 }
 
-std::vector<double> fullmultigrid(cl::sycl::queue& q, ProblemVar &object, std::vector<double>& f_h , int current_level) {
-	std::vector<double> vec_h(f_h.size(), 0);
-	std::vector<double> vec_2h;
+void fullmultigrid(cl::sycl::queue& q, ProblemVar &obj, int current_level) {
+/*
+						4-LEVEL-FMG CYCLE WITH V-CYCLE
+  Levels
+
+	1	 \																	   / V=>S\								  /=>S=>FINAL SOLUTION
+																			  I		  R								 I
+	2	   \								 / V=>S\					 /=>S/		   \=>S\					/=>S/
+											I		R					I					R				   I
+	3		 \		   / V=>S\		  / =>S/		 \=>S\		  / =>S/					 \=>S\		  /=>S/
+					  I		  R	     I					  R		 I								  R		 I
+	4		   \_ DS_/		   \_DS_/					   \_DS_/								   \_DS_/
+	
+	DS => DIRECT SOLVER (EIGEN SPARSELU)
+	I => INTERPOLATION
+	R => RESTRICTION
+	S => SMOOTHER (JACOBI)	
+*/
+
 	if (current_level == coarsest_level) {
 		// Use direct solver here
-		vec_h = direct_solver(object.coarsest_level_matrix, f_h);
-		return vec_h;
+		direct_solver(q , obj);
 	}
 	else {
-		vec_2h = fullmultigrid(q, object, object.b_dict[current_level-1] , current_level-1);
+		fullmultigrid(q, obj, current_level-1);
 	}
-	vec_h = interpolation2D(vec_2h , object , current_level);
-	for (std::int32_t i = 0; i <= mu0; i++) {
-		vec_h = vcyclemultigrid(q,object,vec_h,f_h,current_level);
+	interpolation2D(q,obj , current_level);
+	//Transfer temp_vec to vecs so that vecs acts as a good initial guess based on previous grid soln.
+	q.submit([&](cl::sycl::handler& h) {
+		auto vec_h = obj.vecs_dict[current_level].get_access<cl::sycl::access::mode::write>(h);
+		auto temp_vec = obj.temp_dict[current_level].get_access < cl::sycl::access::mode::read>(h);
+		h.parallel_for(cl::sycl::range<1>{obj.num_dofs_per_level[current_level]}, [=](cl::sycl::id<1>idx) {
+			vec_h[idx[0]] = temp_vec[idx[0]];
+		});		
+	});
+	q.wait();
+	if (current_level != finest_level) {
+
+		for (int i = 0; i <= mu0_1; i++) {
+			vcyclemultigrid(q, obj, current_level);
+		}
 	}
-	return vec_h;
+	else {
+		for (int i = 0; i <= mu0; i++) {
+			vcyclemultigrid(q, obj, current_level);
+		}
+	}
 }
 
-std::vector<double> solve(ProblemVar& object) {
+void solve(ProblemVar& obj) {
 	cl::sycl::queue q;
-	std::vector<double> answer = fullmultigrid(q, object , object.b_dict[finest_level], finest_level );
-	return answer;
-}
-
-PYBIND11_MODULE(multigrid_solver, m) {
-	py::class_<csr_matrix_elements>(m, "csr_matrix_elememts")
-		.def(py::init<py::array_t<int>&, py::array_t<int>&, py::array_t<double>&, int&>());
-	py::class_<csr_jacobi_elements>(m, "csr_jacobi_elements")
-		.def(py::init<csr_matrix_elements&, csr_matrix_elements&>());
-	py::class_<ProblemVar>(m, "ProblemVar")
-		.def(py::init<Eigen::SparseMatrix<double>&,
-			py::array_t<csr_matrix_elements>&,
-			py::array_t<csr_jacobi_elements>&,
-			py::array_t<py::array_t<int>>&,
-			py::array_t<py::array_t<double>>&,
-			py::array_t<py::array_t<int>>&,
-			py::array_t<py::array_t<int>>&,
-			py::array_t<py::array_t<int>>&>());
-	m.def("eigen_matrix_assemble", &coarse_matrix_assemble);
-	m.def("solve", &solve);
+	coarse_matrix_assemble(q, obj); // Assemble the Eigen Matrix for the coarsest level
+	fullmultigrid(q, obj , finest_level );
+	//return answer;
 }
