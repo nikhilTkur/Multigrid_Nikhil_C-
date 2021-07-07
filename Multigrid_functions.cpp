@@ -5,8 +5,8 @@
 #include <vector>
 #include <unordered_map>
 
-int coarsest_level = 1;
-int finest_level = 5;
+extern const int coarsest_level = 1;
+extern const int finest_level = 5;
 int mu0 = 5; // V-cycles per  finest_level
 int mu0_1 = 1; // V-cycles per other levels
 int mu1 = 3; // pre and post smooths
@@ -256,6 +256,8 @@ void vcyclemultigrid(cl::sycl::queue& q, ProblemVar &obj, int current_level) {
 		// during the next V-cycle call
 		q.submit([&](cl::sycl::handler& h) {
 			auto vec_2h = obj.vecs_dict[current_level-1].get_access<cl::sycl::access::mode::write>(h);
+
+			//.cl::sycl::accessor aC(int ,obj.vecs_dict[current_level - 1], h,cl:: sycl::write_only, cl::sycl::noinit)
 			h.parallel_for(cl::sycl::range<1>{obj.num_dofs_per_level[current_level-1]}, [=](cl::sycl::id<1>idx) {
 				vec_2h[idx[0]] = 0.0;
 			});
