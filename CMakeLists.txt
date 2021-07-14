@@ -18,13 +18,13 @@ if (NOT TARGET dolfinx)
   find_package(DOLFINX REQUIRED)
 endif()
 find_package(BLAS REQUIRED)
-
+find_package (Eigen3 3.3 REQUIRED NO_MODULE)
+include_directories(${EIGEN3_INCLUDE_DIR})
 # Executable
 add_executable(${PROJECT_NAME} main.cpp poisson.c Multigrid_functions.h)
 
-target_link_libraries(${PROJECT_NAME} dolfinx)
-target_link_libraries(${PROJECT_NAME} PRIVATE -fsycl)
-target_link_libraries(cpp PUBLIC m mkl_intel_lp64 mkl_core mkl_tbb_thread mkl_intel_thread iomp5 pthread)
+target_link_libraries(${PROJECT_NAME} dolfinx -fsycl m mkl_intel_lp64 mkl_core mkl_tbb_thread mkl_intel_thread iomp5 pthread)
+# target_link_libraries(cpp PUBLIC m mkl_intel_lp64 mkl_core mkl_tbb_thread mkl_intel_thread iomp5 pthread)
 
 # Do not throw error for 'multi-line comments' (these are typical in
 # rst which includes LaTeX)
