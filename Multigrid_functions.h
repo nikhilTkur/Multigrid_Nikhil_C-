@@ -41,7 +41,8 @@ public:
 	std::vector<csr_matrix_elements> A_sp_dict = std::vector<csr_matrix_elements>(finest_level - coarsest_level + 1);
 
 	//[level -> [index = topo dof , value = space dof]]
-	std::unordered_map<int, cl::sycl::buffer<std::int32_t, 1>> topo_to_space_dict;
+	std::vector<cl::sycl::buffer<std::int32_t, 1>> topo_to_space_dict = std::vector<cl::sycl::buffer<std::int32_t, 1>>
+		(num_levels, cl::sycl::buffer<std::int32_t, 1>{nullptr, cl::sycl::range<1>{0}});
 
 	// [level -> RHS for that level as a buffer object]
 	std::vector<cl::sycl::buffer<double, 1>> b_dict = std::vector<cl::sycl::buffer<double,1>>
