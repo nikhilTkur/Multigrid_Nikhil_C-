@@ -10,6 +10,7 @@
 #include <vector>
 #include "Multigrid_functions.h"
 #include <CL/sycl.hpp>
+#include <fstream>
 
 using namespace dolfinx;
 
@@ -23,11 +24,11 @@ int main(int argc, char* argv[])
 
     // starter mesh for the domain. Gets refined at the last step of the following for loop.
     auto mesh = std::make_shared<mesh::Mesh>(generation::RectangleMesh::create(
-        MPI_COMM_WORLD, { {{0.0, 0.0, 0.0}, {1.0, 1.0, 0.0}} }, { 16, 16},
+        MPI_COMM_WORLD, { {{0.0, 0.0, 0.0}, {1.0, 1.0, 0.0}} }, { 4, 4},
         mesh::CellType::triangle, mesh::GhostMode::none));
     {
         // Create mesh and function space
-        for (int level = 1; level <= finest_level; level++) {
+        for (int level = 0; level <= finest_level; level++) {
             // Looping over the number of levels = 5
 
             mesh.topology_mutable().create_entities(1); // Creating the edges for refinement process
@@ -37,7 +38,7 @@ int main(int argc, char* argv[])
             // GET TOPO TO SPACE DICT FOR THE CURRENT MESH AND STORE IT IN OBJECT PROPERTY
             const std::int32_t num_vertices = mesh.topology().index_map(0)->size_local() 
                 + mesh.topology().index_map(0)->num_ghosts();
-            std::vector<std::uint32_t> topo_to_space_map(num_vertices); // CREATE A SPECIFIC SIZE VECTOR
+            std::vector<std::int32_t> topo_to_space_map(num_vertices); // CREATE A SPECIFIC SIZE VECTOR
             auto cells = mesh.topology().connectivity(2, 0);
             for (int c = 0; c < cells->num_nodes(); ++c){
                 auto V_dofs = V_dofmap.links(c); // Space Dofs for current cell
@@ -47,7 +48,11 @@ int main(int argc, char* argv[])
                 }
             }
             //  STORE THE TOPOLOGY TO SPACE MAPPING INTO THE PROGRAM OBJECT PROPERTY BUFFER ON DEVICE
-            obj.topo_to_space_dict[level] = cl::sycl::buffer<std::uint32_t, 1>{ topo_to_space_map };
+            obj.topo_to_space_dict[level] = cl::sycl::buffer<std::int32_t, 1>{ topo_to_space_map };
+
+            //Store the 0 vector in the solution vector space
+            std::vector<double> sol_vector(num_vertices, 0.0);
+            obj.vecs_dict[level] = cl::sycl::buffer<double, 1>{ sol_vector };
 
             // GET EDGES AND STORE IT IN OBJECT PROPERTY
             std::vector<std::int32_t> edge_list(2 * num_vertices);
@@ -103,7 +108,7 @@ int main(int argc, char* argv[])
                     return 10 * xt::exp(-(dx) / 0.02);
                 });*/
 
-            fem::Function<PetscScalar> u(V);
+            //fem::Function<PetscScalar> u(V);
             la::PETScMatrix A = la::PETScMatrix(fem::create_matrix(*a), false);
             la::PETScVector b(*L->function_spaces()[0]->dofmap()->index_map,
                 L->function_spaces()[0]->dofmap()->index_map_bs());
@@ -116,7 +121,7 @@ int main(int argc, char* argv[])
             MatAssemblyBegin(A.mat(), MAT_FINAL_ASSEMBLY);
             MatAssemblyEnd(A.mat(), MAT_FINAL_ASSEMBLY);
 
-            // GET THE MATRIX AND ASSIGN IT TO THE SYCL HANDLE
+            // GET THE MATRIX AND ASSIGN IT TO THE SYCL HANDLES
             double* mat_vals = nullptr;
             std::int32_t* rows = nullptr;
             std::int32_t* cols = nullptr;
@@ -164,11 +169,43 @@ int main(int argc, char* argv[])
             }
             obj.parent_info_vertex_dict[level] = cl::sycl::buffer<std::uint32_t, 1>{ vertex };
             obj.parent_info_edges_dict[level] = cl::sycl::buffer<std::uint32_t, 1>{ edges };
+
+            // Generating the solution using DOLFINX for the finest Level
+            if (level == finest_level) {
+
+                fem::Function<PetscScalar> u(V);                // Stores Dolfinx solution
+                fem::Function<PetscScalar> u_multigrid(V);      // Stores Multigrid solution
+
+                la::PETScKrylovSolver lu(MPI_COMM_WORLD);
+                la::PETScOptions::set("ksp_type", "preonly");
+                la::PETScOptions::set("pc_type", "lu");
+                lu.set_from_options();
+
+                lu.set_operator(A.mat());
+                lu.solve(u.vector(), b.vec());
+                io::VTKFile file(MPI_COMM_WORLD, "u.pvd", "w");
+                file.write({ u }, 0.0);
+
+                //Generating the solution using multigrid 
+                solve(obj); // Multigrid Solver
+                io::VTKFile file_mul(MPI_COMM_WORLD, "u_multigrid.pvd", "w");
+                file_mul.write({ u_multigrid }, 0.0);
+
+                // Creating the vectors for writing to a csv and generating the error reports
+                std::vector<double> sol_dolfinx(u.vector().begin() , u.vector().end());
+                cl::sycl::host_accessor<double,1, cl::sycl::access::mode::read> result{ obj.vecs_dict[finest_level] };
+
+                std::ofstream multigrid_solution("u_mul.csv");
+                std::ofstream dolfinx_solution("u_dolf.csv");
+                for (int i = 0; i < num_vertices; i++) {
+                    multigrid_solution << result[i];
+                    dolfinx_solution << sol_dolfinx[i];
+                }
+                multigrid_solution.close();
+                dolfinx_solution.close();
+            }
         }
     }
-    solve(obj); // Multigrid Solver 
     common::subsystem::finalize_petsc();
-
-    // Store the multigrid solution as a VTK file and compare. 
     return 0;
 }
