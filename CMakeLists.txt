@@ -9,6 +9,7 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)	
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_CXX_FLAGS "-Ofast -fsycl -DMKL_ILP64 -tbb ${CMAKE_CXX_FLAGS} -Wall")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fsycl-unnamed-lambda")
 
 include_directories($ENV{ONE_MKL_DIR})
 
@@ -19,7 +20,7 @@ if (NOT TARGET dolfinx)
 endif()
 find_package(BLAS REQUIRED)
 find_package (Eigen3 3.3 REQUIRED NO_MODULE)
-include_directories(${EIGEN3_INCLUDE_DIR})
+#include_directories(${Eigen3_DIR})
 # Executable
 add_executable(${PROJECT_NAME} main.cpp poisson.c Multigrid_functions.h)
 
@@ -30,4 +31,4 @@ target_link_libraries(${PROJECT_NAME} dolfinx -fsycl m mkl_intel_lp64 mkl_core m
 # rst which includes LaTeX)
 include(CheckCXXCompilerFlag)
 CHECK_CXX_COMPILER_FLAG("-Wno-comment" HAVE_NO_MULTLINE)
-set_source_files_properties(main.cpp PROPERTIES COMPILE_FLAGS "$<$<BOOL:${HAVE_NO_MULTLINE}>:-Wno-comment -Wall -Wextra -pedantic -Werror>")
+set_source_files_properties(main.cpp PROPERTIES COMPILE_FLAGS "$<$<BOOL:${HAVE_NO_MULTLINE}>:-Wno-comment -Wextra -pedantic>")

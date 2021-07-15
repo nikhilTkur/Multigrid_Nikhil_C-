@@ -17,31 +17,32 @@ using namespace dolfinx;
 int main(int argc, char* argv[])
 {
     ProblemVar obj;
-    int num_levels = 5;
-    extern const int finest_level;
+    int num_levels = 3;
+    const int finest_level = 2;
     common::subsystem::init_logging(argc, argv);
     common::subsystem::init_petsc(argc, argv);
 
     // starter mesh for the domain. Gets refined at the last step of the following for loop.
     auto mesh = std::make_shared<mesh::Mesh>(generation::RectangleMesh::create(
-        MPI_COMM_WORLD, { {{0.0, 0.0, 0.0}, {1.0, 1.0, 0.0}} }, { 4, 4},
+        MPI_COMM_WORLD, { {{0.0, 0.0, 0.0}, {1.0, 1.0, 0.0}} }, { 4, 4 },
         mesh::CellType::triangle, mesh::GhostMode::none));
     {
         // Create mesh and function space
         for (int level = 0; level <= finest_level; level++) {
             // Looping over the number of levels = 5
 
-            mesh.topology_mutable().create_entities(1); // Creating the edges for refinement process
+            mesh->topology_mutable().create_entities(1); // Creating the edges for refinement process
             auto V = fem::create_functionspace(functionspace_form_poisson_a, "u", mesh);
-            auto V_dofmap = V.dofmap();
+            auto V_dofmap = V->dofmap();
 
             // GET TOPO TO SPACE DICT FOR THE CURRENT MESH AND STORE IT IN OBJECT PROPERTY
-            const std::int32_t num_vertices = mesh.topology().index_map(0)->size_local() 
-                + mesh.topology().index_map(0)->num_ghosts();
+            const std::int32_t num_vertices = mesh->topology().index_map(0)->size_local()
+                + mesh->topology().index_map(0)->num_ghosts();
+            obj.num_dofs_per_level[level] = num_vertices;
             std::vector<std::int32_t> topo_to_space_map(num_vertices); // CREATE A SPECIFIC SIZE VECTOR
-            auto cells = mesh.topology().connectivity(2, 0);
-            for (int c = 0; c < cells->num_nodes(); ++c){
-                auto V_dofs = V_dofmap.links(c); // Space Dofs for current cell
+            auto cells = mesh->topology().connectivity(2, 0);
+            for (int c = 0; c < cells->num_nodes(); ++c) {
+                auto V_dofs = V_dofmap->cell_dofs(c); // Space Dofs for current cell
                 auto vertices = cells->links(c); // Topology vertices for current cell
                 for (std::size_t i = 0; i < vertices.size(); ++i) {
                     topo_to_space_map[vertices[i]] = V_dofs[i];
@@ -52,11 +53,13 @@ int main(int argc, char* argv[])
 
             //Store the 0 vector in the solution vector space
             std::vector<double> sol_vector(num_vertices, 0.0);
+            std::vector<double> temp_vector(num_vertices, 0.0);
             obj.vecs_dict[level] = cl::sycl::buffer<double, 1>{ sol_vector };
+            obj.temp_dict[level] = cl::sycl::buffer<double, 1>{ temp_vector };
 
             // GET EDGES AND STORE IT IN OBJECT PROPERTY
             std::vector<std::int32_t> edge_list(2 * num_vertices);
-            auto edges = mesh.topology().connectivity(1, 0);
+            auto edges = mesh->topology().connectivity(1, 0);
             for (int e = 0; e < edges->num_nodes(); e++) {
                 auto edge_dofs = edges->links(e); // Storing the adjacency list as a vector
                 edge_list[2 * e] = edge_dofs[0];
@@ -67,8 +70,11 @@ int main(int argc, char* argv[])
             auto f = std::make_shared<fem::Function<PetscScalar>>(V);
 
             // Define variational forms
+            std::map<std::string, std::shared_ptr<const fem::Constant<double>>> constants;
             auto a = std::make_shared<fem::Form<PetscScalar>>(
-                fem::create_form<PetscScalar>(*form_poisson_a, { V, V }, {},{}, {}));
+                fem::create_form<PetscScalar>(*form_poisson_a, { V, V }, {},
+                    { constants }, {}));
+
 
             auto L = std::make_shared<fem::Form<PetscScalar>>(
                 fem::create_form<PetscScalar>(*form_poisson_L, { V },
@@ -84,13 +90,13 @@ int main(int argc, char* argv[])
                 });
 
             const auto bdofs = fem::locate_dofs_geometrical(
-                  { *V },
-                  [](const xt::xtensor<double, 2>& x) -> xt::xtensor<bool, 1>
-                  {
-                      auto x0 = xt::row(x, 0);
-                      auto x1 = xt::row(x, 1);
-                      return xt::isclose(x0, 0.0) or xt::isclose(x0, 1.0) or xt::isclose(x1, 0.0) or xt::isclose(x1, 1.0);
-                  });
+                { *V },
+                [](const xt::xtensor<double, 2>& x) -> xt::xtensor<bool, 1>
+                {
+                    auto x0 = xt::row(x, 0);
+                    auto x1 = xt::row(x, 1);
+                    return xt::isclose(x0, 0.0) or xt::isclose(x0, 1.0) or xt::isclose(x1, 0.0) or xt::isclose(x1, 1.0);
+                });
 
             std::vector bc{ std::make_shared<const fem::DirichletBC<PetscScalar>>(u0, std::move(bdofs)) };
 
@@ -100,21 +106,21 @@ int main(int argc, char* argv[])
                     return -6.0;
                 });
 
-           /* f->interpolate(
-                [](const xt::xtensor<double, 2>& x) -> xt::xarray<PetscScalar>
-                {
-                    auto dx = xt::square(xt::row(x, 0) - 0.5)
-                        + xt::square(xt::row(x, 1) - 0.5);
-                    return 10 * xt::exp(-(dx) / 0.02);
-                });*/
+            /* f->interpolate(
+                 [](const xt::xtensor<double, 2>& x) -> xt::xarray<PetscScalar>
+                 {
+                     auto dx = xt::square(xt::row(x, 0) - 0.5)
+                         + xt::square(xt::row(x, 1) - 0.5);
+                     return 10 * xt::exp(-(dx) / 0.02);
+                 });*/
 
-            //fem::Function<PetscScalar> u(V);
+                 //fem::Function<PetscScalar> u(V);
             la::PETScMatrix A = la::PETScMatrix(fem::create_matrix(*a), false);
             la::PETScVector b(*L->function_spaces()[0]->dofmap()->index_map,
                 L->function_spaces()[0]->dofmap()->index_map_bs());
 
             MatZeroEntries(A.mat());
-            fem::assemble_matrix(la::PETScMatrix::set_block_fn(A.mat(), ADD_VALUES), *a,bc);
+            fem::assemble_matrix(la::PETScMatrix::set_block_fn(A.mat(), ADD_VALUES), *a, bc);
             MatAssemblyBegin(A.mat(), MAT_FLUSH_ASSEMBLY);
             MatAssemblyEnd(A.mat(), MAT_FLUSH_ASSEMBLY);
             fem::set_diagonal(la::PETScMatrix::set_fn(A.mat(), INSERT_VALUES), *V, bc);
@@ -123,15 +129,15 @@ int main(int argc, char* argv[])
 
             // GET THE MATRIX AND ASSIGN IT TO THE SYCL HANDLES
             double* mat_vals = nullptr;
-            std::int32_t* rows = nullptr;
-            std::int32_t* cols = nullptr;
-            std::int32_t n_rows;
-            MatSeqGetArray(A, &mat_vals);
+            const std::int32_t* rows = nullptr;
+            const std::int32_t* cols = nullptr;
+            PetscInt n_rows;
+            MatSeqAIJGetArray(A.mat(), &mat_vals);
             PetscBool done = PETSC_FALSE;
-            MatSeqGetRowIJ(A, 0, PETSC_TRUE, PETSC_FALSE, &n_rows , &rows , &cols, &done);
+            MatGetRowIJ(A.mat(), 0, PETSC_TRUE, PETSC_FALSE, &n_rows, &rows, &cols, &done);
             MatInfo info;
-            MatGetInfo(A, MAT_LOCAL, &info);
-            std::int32_t nnz = info.nz_allocated;
+            MatGetInfo(A.mat(), MAT_LOCAL, &info);
+            std::size_t nnz = info.nz_allocated;
 
             VecSet(b.vec(), 0.0);
             VecGhostUpdateBegin(b.vec(), INSERT_VALUES, SCATTER_FORWARD);
@@ -142,9 +148,9 @@ int main(int argc, char* argv[])
             VecGhostUpdateEnd(b.vec(), ADD_VALUES, SCATTER_REVERSE);
             fem::set_bc_petsc(b.vec(), bc, nullptr);
             std::int32_t n_dofs;
-            VecGetSize(b, &n_dofs);
+            VecGetSize(b.vec(), &n_dofs);
             double* b_array = nullptr;
-            VecGetArray(b, &b_array);
+            VecGetArray(b.vec(), &b_array);
             std::vector<double> b_vec(b_array, b_array + n_dofs);
 
             // Store the current level matrix in obj's property
@@ -153,26 +159,9 @@ int main(int argc, char* argv[])
             // Store the current level RHS
             obj.b_dict[level] = cl::sycl::buffer<double, 1>{ b_vec };
 
-            // REFINE THE MESH AND MAKE IT CURRENT MESH.
-            std::pair<dolfinx::mesh::Mesh, dolfinx::refinement::ParentRelationshipInfo> refine_mesh_info 
-                = dolfinx::refinement::refine(mesh);
-            mesh = refine_mesh_info.first;
-
-            //STORE THE PARENT INFO IN THE PROGRAM OBJECT PROPERTY
-            std::vector<std::uint32_t> vertex(n_dofs);    // Stores the vertex to vertex map of fine to coarse
-            std::vector<std::uint32_t>edges(refine_mesh_info.second.parent_map().size() - n_dofs); // Sotres the vertex to edge map of fine to coarse
-            for(int k = 0; k < n_dofs; k++){
-                vertex[k] = refine_mesh_info.second.parent_map()[k].second;
-            }
-            for (int k = n_dofs; k < refine_mesh_info.second.parent_map().size(); k++) {
-                edges[k - n_dofs] = refine_mesh_info.second.parent_map()[k].second;
-            }
-            obj.parent_info_vertex_dict[level] = cl::sycl::buffer<std::uint32_t, 1>{ vertex };
-            obj.parent_info_edges_dict[level] = cl::sycl::buffer<std::uint32_t, 1>{ edges };
-
-            // Generating the solution using DOLFINX for the finest Level
             if (level == finest_level) {
 
+                // Generating the solution using DOLFINX for the finest Level
                 fem::Function<PetscScalar> u(V);                // Stores Dolfinx solution
                 fem::Function<PetscScalar> u_multigrid(V);      // Stores Multigrid solution
 
@@ -192,8 +181,8 @@ int main(int argc, char* argv[])
                 file_mul.write({ u_multigrid }, 0.0);
 
                 // Creating the vectors for writing to a csv and generating the error reports
-                std::vector<double> sol_dolfinx(u.vector().begin() , u.vector().end());
-                cl::sycl::host_accessor<double,1, cl::sycl::access::mode::read> result{ obj.vecs_dict[finest_level] };
+                std::vector<double> sol_dolfinx = u.x()->array();
+                cl::sycl::host_accessor<double, 1, cl::sycl::access::mode::read> result{ obj.vecs_dict[finest_level] };
 
                 std::ofstream multigrid_solution("u_mul.csv");
                 std::ofstream dolfinx_solution("u_dolf.csv");
@@ -203,6 +192,25 @@ int main(int argc, char* argv[])
                 }
                 multigrid_solution.close();
                 dolfinx_solution.close();
+            }
+
+            else {
+                // REFINE THE MESH AND MAKE IT CURRENT MESH.
+                std::pair<dolfinx::mesh::Mesh, dolfinx::refinement::ParentRelationshipInfo> refine_mesh_info
+                    = dolfinx::refinement::refine(*mesh);
+                mesh.reset(&refine_mesh_info.first);
+
+                //STORE THE PARENT INFO IN THE PROGRAM OBJECT PROPERTY
+                std::vector<std::int32_t> vertex_list(n_dofs);    // Stores the vertex to vertex map of fine to coarse
+                std::vector<std::int32_t>edges_list(refine_mesh_info.second.parent_map().size() - n_dofs); // Sotres the vertex to edge map of fine to coarse
+                for (int k = 0; k < n_dofs; k++) {
+                    vertex_list[k] = refine_mesh_info.second.parent_map()[k].second;
+                }
+                for (int k = n_dofs; k < refine_mesh_info.second.parent_map().size(); k++) {
+                    edges_list[k - n_dofs] = refine_mesh_info.second.parent_map()[k].second;
+                }
+                obj.parent_info_vertex_dict[level] = cl::sycl::buffer<std::int32_t, 1>{ vertex_list };
+                obj.parent_info_edges_dict[level] = cl::sycl::buffer<std::int32_t, 1>{ edges_list };
             }
         }
     }
