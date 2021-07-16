@@ -24,7 +24,6 @@ struct csr_matrix_elements
 	cl::sycl::buffer<double, 1> values{ nullptr , cl::sycl::range<1>{0} };
 	oneapi::mkl::sparse::matrix_handle_t matrix;
 	std::size_t size;
-	csr_matrix_elements();
 	csr_matrix_elements(const std::int32_t* row_ptr, const std::int32_t* col_ptr, double* val_ptr,
 		std::size_t nnz, std::size_t n_dofs) {
 
@@ -41,7 +40,10 @@ struct csr_matrix_elements
 class ProblemVar {
 public:
 	Eigen::SparseMatrix<double> coarsest_level_matrix;
-	std::vector<csr_matrix_elements> A_sp_dict = std::vector<csr_matrix_elements>(finest_level - coarsest_level + 1);
+	int size = finest_level - coarsest_level + 1;
+	
+	// Need to push back to insert into data structure.
+	std::vector<csr_matrix_elements> A_sp_dict;
 
 	//[level -> [index = topo dof , value = space dof]]
 	std::vector<cl::sycl::buffer<std::int32_t, 1>> topo_to_space_dict = std::vector<cl::sycl::buffer<std::int32_t, 1>>
@@ -86,7 +88,7 @@ void coarse_matrix_assemble(ProblemVar& obj) {
 		obj.num_dofs_per_level[coarsest_level]);
 	obj.coarsest_level_matrix.reserve(Eigen::VectorXd::Constant(obj.num_dofs_per_level[coarsest_level], 4));
 
-	for (int i = 0; i < obj.num_dofs_per_level[coarsest_level]; i++) {
+	for (std::size_t i = 0; i < obj.num_dofs_per_level[coarsest_level]; i++) {
 		for (int j = row[i]; j <= row[i + 1] - 1; j++) {
 			obj.coarsest_level_matrix.insert(i, col[j]) = val[j];
 		}
